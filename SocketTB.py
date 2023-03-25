@@ -1,3 +1,7 @@
+# SocketTB v1.0.0 (https://github.com/PCigales/WinSocketTB)
+# Copyright © 2023 PCigales
+# This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
+
 import socket
 import ssl
 import ctypes, ctypes.wintypes
@@ -2116,6 +2120,7 @@ class MultiUDPIServer(UDPIServer):
     with self.lock:
       if self.closed is not None:
         return
+      self.thread = threading.current_thread()
       self.closed = False
     while not self.closed:
       try:
