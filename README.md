@@ -16,5 +16,5 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 13. Time and offset from NTP Server: NTPRetriever
 14. Time based One Time Password: TOTPassword
 
-Usage: from SocketTB import *
+Usage: from SocketTB import *  
 See test.py for examples
