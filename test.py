@@ -136,3 +136,11 @@ with IDSocketGenerator() as IDGen:
   print(pcon)
   print(rep.body(20))
   pcon[0].shutclose()
+
+ntp = NTPRetriever('time.google.com')
+print(ntp.get_time(to_local=True))
+print(ntp.get_offset())
+ntp.close()
+
+totp = TOTPassword('AAAAAAAAAAAAAAAA')
+print(totp.get(clipboard=True))

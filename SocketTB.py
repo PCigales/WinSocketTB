@@ -7,6 +7,7 @@ import ssl
 import ctypes, ctypes.wintypes
 import threading
 import time
+import datetime
 import types
 from functools import partial, partialmethod, reduce
 from contextlib import contextmanager
@@ -14,14 +15,16 @@ import urllib.parse
 from io import BytesIO
 import math
 import base64
+import hmac
 import zlib
 import gzip
 import os
 import hashlib
 import struct
 import textwrap
+import subprocess
 
-__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'TCPIServer', 'RequestHandler', 'MultiUDPIServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDClient']
+__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'TCPIServer', 'RequestHandler', 'MultiUDPIServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDClient', 'NTPRetriever', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -2967,3 +2970,87 @@ class WebSocketIDClient(WebSocketHandler):
     else:
       th = threading.Thread(target=self._close, args=(timeout, False), daemon=self.daemon_thread)
       th.start()
+
+
+class NTPRetriever:
+
+  def __init__(self, server='time.windows.com'):
+    self.server = server
+    self.isocketgen = ISocketGenerator()
+
+  def get_time(self, to_local=False):
+    try:
+      isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
+      if not isocket:
+        raise
+    except:
+      return None
+    try:
+      isocket.sendto(b'\x1b'.ljust(48, b'\x00'), (self.server, 123))
+      r = isocket.recv(48)
+      if len(r) < 48:
+        raise
+    except:
+      return None
+    finally:
+      try:
+        isocket.shutclose()
+      except:
+        pass
+    t = int.from_bytes(r[40:44], 'big', signed=False) - 2208988800 + int.from_bytes(r[44:48], 'big', signed=False) / (1 << 32)
+    if to_local:
+      try:
+        t = datetime.datetime.fromtimestamp(t).strftime("%x %X.%f")
+      except:
+        return None
+    return t
+
+  def get_offset(self):
+    try:
+      isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
+      if not isocket:
+        raise
+    except:
+      return None
+    tc1 = time.time()
+    try:
+      isocket.sendto(struct.pack('>40s2L', b'\x1b', int(tc1), int((tc1 % 1) * (1 << 32))), (self.server, 123))
+      r = isocket.recv(48)
+      tc2 = time.time()
+      if len(r) < 48:
+        raise
+    except:
+      return None
+    finally:
+      try:
+        isocket.shutclose()
+      except:
+        pass
+    ts = struct.unpack('>4L', r[32:48])
+    ts1 = ts[0] - 2208988800 + ts[1] / (1 << 32)
+    ts2 = ts[2] - 2208988800 + ts[3] / (1 << 32)
+    return (ts1 - tc1) / 2 + (ts2 - tc2) / 2
+
+  def close(self):
+    self.isocketgen.close()
+
+
+class TOTPassword:
+
+  def __init__(self, key, ntp_server=''):
+    self.key = base64.b32decode(key)
+    if ntp_server is None:
+      self.to = 0
+    else:
+      ntpr = NTPRetriever(ntp_server) if ntp_server else NTPRetriever()
+      self.to = ntpr.get_offset() or 0
+      ntpr.close()
+
+  def get(self, clipboard=False):
+    t = time.time() + self.to
+    d = hmac.digest(self.key, int(t / 30).to_bytes(8, 'big', signed=False), "sha1")
+    o = d[-1] & 0xf
+    p = str((int.from_bytes(d[o:o+4], 'big', signed=False) & 0x7fffffff) % 1000000).rjust(6, '0')
+    if clipboard:
+      subprocess.run('<nul set /P ="%s"| clip' % p, shell=True)
+    return p, 30 - int(t % 30)
