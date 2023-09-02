@@ -3037,8 +3037,11 @@ class NTPRetriever:
 
 class TOTPassword:
 
-  def __init__(self, key, ntp_server=''):
+  def __init__(self, key, time_origin=0, time_interval=30, password_length=6, ntp_server=''):
     self.key = base64.b32decode(key)
+    self.origin = time_origin
+    self.interval = time_interval
+    self.length = password_length
     if ntp_server is None:
       self.to = 0
     else:
@@ -3047,10 +3050,10 @@ class TOTPassword:
       ntpr.close()
 
   def get(self, clipboard=False):
-    t = time.time() + self.to
-    d = hmac.digest(self.key, int(t / 30).to_bytes(8, 'big', signed=False), "sha1")
+    t = time.time() + self.to - self.origin
+    d = hmac.digest(self.key, int(t / self.interval).to_bytes(8, 'big', signed=False), "sha1")
     o = d[-1] & 0xf
-    p = str((int.from_bytes(d[o:o+4], 'big', signed=False) & 0x7fffffff) % 1000000).rjust(6, '0')
+    p = str((int.from_bytes(d[o:o+4], 'big', signed=False) & 0x7fffffff) % (10 ** self.length)).rjust(self.length, '0')
     if clipboard:
       subprocess.run('<nul set /P ="%s"| clip' % p, shell=True)
-    return p, 30 - int(t % 30)
+    return p, self.interval - int(t % self.interval)
