@@ -137,10 +137,9 @@ with IDSocketGenerator() as IDGen:
   print(rep.body(20))
   pcon[0].shutclose()
 
-ntp = NTPRetriever('time.google.com')
-print(ntp.get_time(to_local=True))
-print(ntp.get_offset())
-ntp.close()
+with NTPClient('time.google.com') as ntpc:
+  print(ntpc.get_time(to_local=True))
+  print(ntpc.get_offset())
 
 totp = TOTPassword('AAAAAAAAAAAAAAAA')
 print(totp.get(clipboard=True))
