@@ -595,9 +595,9 @@ class NestedSSLContext(ssl.SSLContext):
     @classmethod
     def _create(cls, sock, *args, do_handshake_on_connect=True, **kwargs):
       so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
-      so.settimeout(sock.gettimeout())
       self = ssl.SSLSocket._create.__func__(NestedSSLContext.SSLSocket, so, *args, do_handshake_on_connect=False, **kwargs)
       self.socket = sock
+      self.settimeout(sock.timeout)
       self.do_handshake_on_connect = do_handshake_on_connect
       if self._connected and do_handshake_on_connect:
         try:
@@ -608,6 +608,12 @@ class NestedSSLContext(ssl.SSLContext):
           self.close()
           raise
       return self
+
+    def setblocking(self, flag):
+      try:
+        self.setblocking(flag)
+      except:
+        pass
 
     def close(self):
       self.detach()
