@@ -1,4 +1,4 @@
-# SocketTB v1.1.0 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.1.1 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -78,8 +78,10 @@ class ISocketMeta(type):
 
   def __init__(cls, *args, **kwargs):
     type.__init__(cls, *args, **kwargs)
-    for name in ('recv', 'recvfrom', 'recv_into', 'recvfrom_into', 'send', 'sendto'):
-      setattr(cls, name, partialmethod(cls._func_wrap, name))
+    for name in ('recv', 'recvfrom', 'recv_into', 'recvfrom_into'):
+      setattr(cls, name, partialmethod(cls._func_wrap, 'r', getattr(socket.socket, name), 2 if name[-4:] == 'into' else 1))
+    for name in ('send', 'sendto'):
+      setattr(cls, name, partialmethod(cls._func_wrap, 'w', getattr(socket.socket, name), float('inf')))
     def attribute_error(self, *args, **kwargs):
       raise NotImplementedError()
     for name in ('dup', 'makefile', 'connect_ex', 'ioctl', 'share', 'setblocking'):
@@ -210,27 +212,20 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       ws2.WSAResetEvent(self.event)
       return True
 
-  def _func_wrap(self, name, *args, timeout='', **kwargs):
+  def _func_wrap(self, mode, func, f, *args, timeout='', **kwargs):
     with self.lock(timeout) as rt:
       if self.closed:
         raise InterruptedError()
-      if name in ('recv', 'recvfrom', 'recv_into', 'recvfrom_into'):
-        self.mode = 'r'
-        f = 2 if name[-4:] == 'into' else 1
-      elif name in ('send', 'sendto'):
-        self.mode = 'w'
-      else:
-        raise AttributeError()
+      self.mode = mode
       ws2.WSAResetEvent(self.event)
-      func = getattr(socket.socket, name)
       try:
         r = func(self, *args, **kwargs)
-        if self.mode == 'r' and len(args) > f and (args[f] & socket.MSG_PEEK):
+        if len(args) > f and (args[f] & socket.MSG_PEEK):
           ws2.WSASetEvent(self.event)
         return r
       except BlockingIOError:
         if self.wait(rt):
-          if self.mode == 'r' and len(args) > f and (args[f] & socket.MSG_PEEK):
+          if len(args) > f and (args[f] & socket.MSG_PEEK):
             ws2.WSASetEvent(self.event)
           return func(self, *args, **kwargs)
       raise InterruptedError() if self.closed else TimeoutError()
@@ -377,7 +372,10 @@ class ISocketGenerator:
         isock = self.isockets[0]
       except:
         break
-      isock.shutclose()
+      try:
+        isock.shutclose()
+      except:
+        pass
 
   def __enter__(self):
     return self
@@ -480,12 +478,14 @@ class IDSocket(ISocket):
     while not self.closed:
       ws2.WSAWaitForMultipleEvents(ULONG(1), byref(self.event), BOOL(False), ULONG(-1), BOOL(False))
       if not self.closed:
-        ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(lpNetworkEvents))
-        for m in ('r', 'a', 'w', 'c'):
-          if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
-            self.events[m].set()
-            self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
-            self.gen.events[m].set()
+        if ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(lpNetworkEvents)):
+          ws2.WSAResetEvent(self.event)
+        else:
+          for m in ('r', 'a', 'w', 'c'):
+            if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
+              self.events[m].set()
+              self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
+              self.gen.events[m].set()
     for m in ('r', 'a', 'w', 'c'):
       self.events[m].set()
       self.gen.events[m].set()
@@ -495,31 +495,25 @@ class IDSocket(ISocket):
     t = threading.Thread(target=self._wait, daemon=True)
     t.start()
 
-  def _func_wrap(self, name, *args, timeout='', **kwargs):
-    if name in ('recv', 'recvfrom', 'recv_into', 'recvfrom_into'):
-      m = 'r'
-      f = 2 if name[-4:] == 'into' else 1
-    elif name in ('send', 'sendto'):
-      m = 'w'
-    else:
-      raise AttributeError()
+  def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
     with self.lock(timeout, m) as rt:
       self.events[m].clear()
       if self.closed:
         raise InterruptedError()
-      func = getattr(socket.socket, name)
-      try:
-        r = func(self, *args, **kwargs)
-        if m == 'r' and len(args) > f and (args[f] & socket.MSG_PEEK):
-          self.events[m].set()
-        return r
-      except BlockingIOError:
-        if self.events[m].wait(rt):
-          if m != 'r' or len(args) <= f or not (args[f] & socket.MSG_PEEK):
-            self.events[m].clear()
-          if self.closed:
-            raise InterruptedError()
-          return func(self, *args, **kwargs)
+      while True:
+        try:
+          r = func(self, *args, **kwargs)
+          if len(args) > f and (args[f] & socket.MSG_PEEK):
+            self.events[m].set()
+          return r
+        except BlockingIOError:
+          if self.events[m].wait(rt):
+            if len(args) <= f or not (args[f] & socket.MSG_PEEK):
+              self.events[m].clear()
+            if self.closed:
+              raise InterruptedError()
+          else:
+            break
       raise InterruptedError() if self.closed else TimeoutError()
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
@@ -528,25 +522,24 @@ class IDSocket(ISocket):
 
   def accept(self, timeout=''):
     with self.lock(timeout, 'a') as rt:
+      self.events['a'].clear()
       if self.closed:
         raise InterruptedError()
-      self.events['a'].clear()
-      self.gettimeout = lambda : None
       a = None
-      try:
-        a = socket.socket.accept(self)
-      except BlockingIOError:
-        del self.gettimeout
-        if self.events['a'].wait(rt):
-          self.events['a'].clear()
-          if not self.closed:
-            self.gettimeout = lambda : None
-            a = socket.socket.accept(self)
-      finally:
+      while True:
+        self.gettimeout = lambda : None
         try:
+          a = socket.socket.accept(self)
           del self.gettimeout
-        except:
-          pass
+          break
+        except BlockingIOError:
+          del self.gettimeout
+          if self.events['a'].wait(rt):
+            self.events['a'].clear()
+            if self.closed:
+              raise InterruptedError()
+          else:
+            break
       if a is not None:
         isock = self.gen.wrap(a[0])
         isock.settimeout(self.timeout)        
@@ -602,6 +595,7 @@ class NestedSSLContext(ssl.SSLContext):
     @classmethod
     def _create(cls, sock, *args, do_handshake_on_connect=True, **kwargs):
       so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
+      so.settimeout(sock.gettimeout())
       self = ssl.SSLSocket._create.__func__(NestedSSLContext.SSLSocket, so, *args, do_handshake_on_connect=False, **kwargs)
       self.socket = sock
       self.do_handshake_on_connect = do_handshake_on_connect
@@ -670,22 +664,30 @@ class NestedSSLContext(ssl.SSLContext):
         self._sslobj = None
         raise
 
+    def __del__(self):
+      self.shutclose()
+      super().__del__()
+
   sslsocket_class = SSLSocket
+  ssl_read_ahead = 16384
 
   class _SSLSocket():
 
     def __init__(self, context, ssl_sock, server_side, server_hostname):
+      self.context = context
       self.sslsocket = ssl_sock
-      self.is_isocket = isinstance(ssl_sock, ISocket)
       self.inc = ssl.MemoryBIO()
       self.out = ssl.MemoryBIO()
       self.sslobj = context.wrap_bio(self.inc, self.out, server_side, server_hostname)
 
     def __getattr__(self, name):
+      if name == 'is_isocket':
+        self.is_isocket = isinstance(self.sslsocket.socket, ISocket)
+        return self.is_isocket
       return self.sslobj._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('sslsocket', 'is_isocket', 'inc', 'out', 'sslobj'):
+      if name in ('sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context'):
         object.__setattr__(self, name, value)
       else:
         self.sslobj._sslobj.__setattr__(name, value)
@@ -711,19 +713,17 @@ class NestedSSLContext(ssl.SSLContext):
           raise ConnectionResetError
         bl += b_
       l = int.from_bytes(bl[3:5], 'big')
-      b = bytearray(l + 5)
-      b[0:5] = bl
-      m = memoryview(b)
+      self.inc.write(bl)
       if timeout is not None:
         rt = timeout = max(0, timeout + t - time.monotonic())
       t = None
       while l > 0:
         set_rt()
-        bl = self.sslsocket.socket.recv_into(m[-l:], l, timeout=rt) if self.is_isocket else self.sslsocket.socket.recv_into(m[-l:], l)
-        if not bl:
+        b_ = self.sslsocket.socket.recv(l, timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(l)
+        if not b_:
           raise ConnectionResetError
-        l -= bl
-      self.inc.write(b)
+        l -= len(b_)
+        self.inc.write(b_)
 
     def interface(self, action):
       rt = timeout = self.sslsocket.gettimeout()
@@ -741,7 +741,6 @@ class NestedSSLContext(ssl.SSLContext):
               rt = 0
             else:
               raise TimeoutError(10060, 'timed out')
-      fl = True
       while True:
         try:
           res = action()
@@ -759,7 +758,11 @@ class NestedSSLContext(ssl.SSLContext):
           if err.errno == ssl.SSL_ERROR_WANT_READ:
             set_rt(z)
             try:
-              self._read_record(rt)
+              if self.context.ssl_read_ahead:
+                if not (self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead, timeout=rt)) if self.is_isocket else self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead))):
+                  raise ConnectionResetError
+              else:
+                self._read_record(rt)
             except ConnectionResetError:
               if action == self.sslobj._sslobj.do_handshake:
                 raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
@@ -773,7 +776,6 @@ class NestedSSLContext(ssl.SSLContext):
             else:
               self.sslsocket.socket.sendall(self.out.read())
           return res
-        fl = False
 
     def do_handshake(self):
       return self.interface(self.sslobj._sslobj.do_handshake)
@@ -1550,7 +1552,7 @@ class HTTPBaseRequest:
       raise TimeoutError()
     return rem_time
 
-  def __new__(cls, url, method=None, headers=None, data=None, timeout=3, max_length=1048576, max_hlength=1048576, max_time=None, decompress=True, pconnection=None, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None):
+  def __new__(cls, url, method=None, headers=None, data=None, timeout=30, max_length=1048576, max_hlength=1048576, max_time=None, decompress=True, pconnection=None, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None):
     if url is None:
       return HTTPMessage()
     if method is None:
@@ -2978,11 +2980,12 @@ class NTPClient:
     self.server = server
     self.isocketgen = ISocketGenerator()
 
-  def query(self):
+  def query(self, timeout=None):
     try:
       isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
       if not isocket:
         raise
+      isocket.settimeout(timeout)
     except:
       return None
     tc1 = time.time()
@@ -3004,9 +3007,9 @@ class NTPClient:
     tc2 = time.time()
     return tc1, ts1, ts2, tc2
 
-  def get_time(self, to_local=False):
+  def get_time(self, to_local=False, timeout=None):
     try:
-      tc1, ts1, ts2, tc2 = self.query()
+      tc1, ts1, ts2, tc2 = self.query(timeout)
     except:
       return None
     if to_local:
@@ -3016,9 +3019,9 @@ class NTPClient:
         return None
     return ts2
 
-  def get_offset(self):
+  def get_offset(self, timeout=None):
     try:
-      tc1, ts1, ts2, tc2 = self.query()
+      tc1, ts1, ts2, tc2 = self.query(timeout)
     except:
       return None
     return (ts1 - tc1 + ts2 - tc2) / 2
@@ -3038,16 +3041,23 @@ class NTPClient:
 
 class TOTPassword:
 
-  def __init__(self, key, password_length=6, time_origin=0, time_interval=30, ntp_server=''):
+  def __new__(cls, key, password_length=6, time_origin=0, time_interval=30, ntp_server='', ntp_timeout=None):
+    if ntp_server is None:
+      to = 0
+    else:
+      with (NTPClient(ntp_server) if ntp_server else NTPClient()) as ntpc:
+        to = ntpc.get_offset(ntp_timeout)
+      if to is None:
+        return None
+    self = object.__new__(cls)
+    self.to = to
+    return self
+
+  def __init__(self, key, password_length=6, time_origin=0, time_interval=30, **kwargs):
     self.key = base64.b32decode(key)
     self.origin = time_origin
     self.interval = time_interval
     self.length = password_length
-    if ntp_server is None:
-      self.to = 0
-    else:
-      with (NTPClient(ntp_server) if ntp_server else NTPClient()) as ntpc:
-        self.to = ntpc.get_offset() or 0
 
   def get(self, clipboard=False):
     t = time.time() + self.to - self.origin
@@ -3057,3 +3067,9 @@ class TOTPassword:
     if clipboard:
       subprocess.run('<nul set /P ="%s"| clip' % p, shell=True)
     return p, self.interval - int(t % self.interval)
+
+  def __enter__(self):
+    return self
+
+  def __exit__(self, et, ev, tb):
+    self.key = b''
