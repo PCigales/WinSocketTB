@@ -84,7 +84,7 @@ class ISocketMeta(type):
       setattr(cls, name, partialmethod(cls._func_wrap, 'w', getattr(socket.socket, name), float('inf')))
     def attribute_error(self, *args, **kwargs):
       raise NotImplementedError()
-    for name in ('dup', 'makefile', 'connect_ex', 'ioctl', 'share', 'setblocking'):
+    for name in ('dup', 'makefile', 'connect_ex', 'ioctl', 'share'):
       setattr(cls, name, attribute_error)
 
 
@@ -198,6 +198,12 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
 
   def settimeout(self, value):
     self.sock_timeout = value
+
+  def getblocking(self):
+    return self.sock_timeout != 0
+
+  def setblocking(self, flag):
+    self.sock_timeout = None if flag else 0
 
   @property
   def timeout(self):
@@ -596,8 +602,11 @@ class NestedSSLContext(ssl.SSLContext):
     def _create(cls, sock, *args, do_handshake_on_connect=True, **kwargs):
       so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
       self = ssl.SSLSocket._create.__func__(NestedSSLContext.SSLSocket, so, *args, do_handshake_on_connect=False, **kwargs)
+      try:
+        super(cls, self).settimeout(sock.timeout)
+      except:
+        pass
       self.socket = sock
-      self.settimeout(sock.timeout)
       self.do_handshake_on_connect = do_handshake_on_connect
       if self._connected and do_handshake_on_connect:
         try:
@@ -608,12 +617,6 @@ class NestedSSLContext(ssl.SSLContext):
           self.close()
           raise
       return self
-
-    def setblocking(self, flag):
-      try:
-        self.setblocking(flag)
-      except:
-        pass
 
     def close(self):
       self.detach()
@@ -647,6 +650,16 @@ class NestedSSLContext(ssl.SSLContext):
         pass
       try:
         self.socket.settimeout(value)
+      except:
+        pass
+
+    def setblocking(self, flag):
+      try:
+        super().setblocking(flag)
+      except:
+        pass
+      try:
+        self.socket.setblocking(flag)
       except:
         pass
 
