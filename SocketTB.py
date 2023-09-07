@@ -601,25 +601,20 @@ class IDSocketGenerator(ISocketGenerator):
 class NestedSSLContext(ssl.SSLContext):
 
   class SSLSocket(ssl.SSLSocket):
-
+  
     @classmethod
-    def _create(cls, sock, *args, do_handshake_on_connect=True, **kwargs):
+    def _create(cls, sock, *args, **kwargs):
+      class BoundSSLSocket(NestedSSLContext.SSLSocket):
+        def __new__(cls, *args, **kwargs):
+          self = super(cls, cls).__new__(cls, *args, **kwargs)
+          self.socket = sock
+          return self
       so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
-      self = ssl.SSLSocket._create.__func__(NestedSSLContext.SSLSocket, so, *args, do_handshake_on_connect=False, **kwargs)
       try:
-        super(cls, self).settimeout(sock.timeout)
+        so.settimeout(sock.timeout)
       except:
         pass
-      self.socket = sock
-      self.do_handshake_on_connect = do_handshake_on_connect
-      if self._connected and do_handshake_on_connect:
-        try:
-          if self.gettimeout() == 0:
-            raise ValueError('do_handshake_on_connect should not be specified for non-blocking sockets')
-          self.do_handshake()
-        except (OSError, ValueError):
-          self.close()
-          raise
+      self = ssl.SSLSocket._create.__func__(BoundSSLSocket, so, *args, **kwargs)
       return self
 
     def close(self):
