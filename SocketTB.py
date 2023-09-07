@@ -744,7 +744,7 @@ class NestedSSLContext(ssl.SSLContext):
         l -= len(b_)
         self.inc.write(b_)
 
-    def interface(self, action):
+    def interface(self, action, *args, **kwargs):
       rt = timeout = self.sslsocket.gettimeout()
       t = None
       def set_rt(z=False):
@@ -762,7 +762,7 @@ class NestedSSLContext(ssl.SSLContext):
               raise TimeoutError(10060, 'timed out')
       while True:
         try:
-          res = action()
+          res = action(*args, **kwargs)
         except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
           z = False
           if self.out.pending:
@@ -800,7 +800,7 @@ class NestedSSLContext(ssl.SSLContext):
       return self.interface(self.sslobj._sslobj.do_handshake)
 
     def read(self, length=16384, buffer=None):
-      return self.interface(partial(self.sslobj._sslobj.read, length) if buffer is None else partial(self.sslobj._sslobj.read, length, buffer))
+      return self.interface(self.sslobj._sslobj.read, length) if buffer is None else self.interface(self.sslobj._sslobj.read, length, buffer)
 
     def write(self, bytes):
       w = self.sslobj._sslobj.write(bytes)
