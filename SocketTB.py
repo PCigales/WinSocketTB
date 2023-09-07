@@ -536,7 +536,6 @@ class IDSocket(ISocket):
         self.gettimeout = lambda : None
         try:
           a = socket.socket.accept(self)
-          del self.gettimeout
           break
         except BlockingIOError:
           del self.gettimeout
@@ -546,6 +545,11 @@ class IDSocket(ISocket):
               raise InterruptedError()
           else:
             break
+        finally:
+          try:
+            del self.gettimeout
+          except:
+            pass
       if a is not None:
         isock = self.gen.wrap(a[0])
         isock.settimeout(self.timeout)        
