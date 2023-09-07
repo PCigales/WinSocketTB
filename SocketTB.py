@@ -601,7 +601,7 @@ class IDSocketGenerator(ISocketGenerator):
 class NestedSSLContext(ssl.SSLContext):
 
   class SSLSocket(ssl.SSLSocket):
-  
+
     @classmethod
     def _create(cls, sock, *args, **kwargs):
       class BoundSSLSocket(NestedSSLContext.SSLSocket):
