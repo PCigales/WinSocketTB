@@ -141,5 +141,9 @@ with NTPClient('time.google.com') as ntpc:
   print(ntpc.get_time(to_local=True))
   print(ntpc.get_offset())
 
-totp = TOTPassword('AAAAAAAAAAAAAAAA')
-print(totp.get(clipboard=True))
+with TOTPassword('AAAAAAAAAAAAAAAA') as totp:
+  for i in range(10):
+    p, r = totp.get(clipboard=True)
+    print('', p, str(r).rjust(4), end ='\b'*12, flush=True)
+    time.sleep(1)
+  print('')
