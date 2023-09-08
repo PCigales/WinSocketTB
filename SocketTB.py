@@ -379,7 +379,7 @@ class ISocketGenerator:
     with self.lock:
       self.closed = True
     for isock, activ in self.isockets.items():
-      if active:
+      if activ:
         isock.shutclose()
 
   def __enter__(self):
