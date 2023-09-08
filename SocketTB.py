@@ -6,6 +6,7 @@ import socket
 import ssl
 import ctypes, ctypes.wintypes
 import threading
+import weakref
 import time
 import datetime
 import types
@@ -102,7 +103,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     self._mode = ''
     self._lock = threading.RLock()
     self.closed = False
-    gen.isockets.append(self)
+    gen.isockets[self] = True
 
   @contextmanager
   def lock(self, timeout=''):
@@ -136,7 +137,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     else:
       ws2.WSACloseEvent(self.event)
       try:
-        self.gen.isockets.remove(self)
+        self.gen.isockets[self] = False
       except:
         pass
 
@@ -177,7 +178,10 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       socket.socket.shutdown(self, socket.SHUT_RDWR)
     except:
       pass
-    socket.socket.close(self)
+    try:
+      socket.socket.close(self)
+    except:
+      pass
     self.sock_fileno = -1
 
   def detach(self):
@@ -188,10 +192,11 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     return self
 
   def __exit__(self, et, ev, tb):
-    try:
-      self.shutclose()
-    except:
-      pass
+    self.shutclose()
+
+  def __del__(self):
+    self.shutclose()
+    super().__del__()
 
   def gettimeout(self):
     return self.sock_timeout
@@ -351,7 +356,7 @@ class ISocketGenerator:
   CLASS = ISocket
 
   def __init__(self):
-    self.isockets = []
+    self.isockets = weakref.WeakKeyDictionary()
     self.lock = threading.Lock()
     self.closed = False
     self.defaulttimeout = socket.getdefaulttimeout()
@@ -373,15 +378,9 @@ class ISocketGenerator:
   def close(self):
     with self.lock:
       self.closed = True
-    while True:
-      try:
-        isock = self.isockets[0]
-      except:
-        break
-      try:
+    for isock, activ in self.isockets.items():
+      if active:
         isock.shutclose()
-      except:
-        pass
 
   def __enter__(self):
     return self
@@ -426,7 +425,7 @@ class ISocketGenerator:
   def waitany(self, timeout, event):
     if not event in ('r', 'a', 'w', 'c') or self.closed:
       return ()
-    return ISocket.waitmult(timeout, *self.isockets, event=event, reset_event=False)
+    return ISocket.waitmult(timeout, *(isock for isock, activ in self.isockets.items() if activ), event=event, reset_event=False)
 
 
 class IDSocket(ISocket):
@@ -479,26 +478,38 @@ class IDSocket(ISocket):
             del self._queue_w[0]
         self._condition.notify_all()
 
-  def _wait(self):
+  @staticmethod
+  def _wait(ref):
+    self = ref()
+    if not self:
+      return
+    e = self.event
+    f = SOCKET(self.sock_fileno)
     lpNetworkEvents = WSANETWORKEVENTS()
     while not self.closed:
-      ws2.WSAWaitForMultipleEvents(ULONG(1), byref(self.event), BOOL(False), ULONG(-1), BOOL(False))
-      if not self.closed:
-        if ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(lpNetworkEvents)):
-          ws2.WSAResetEvent(self.event)
-        else:
-          for m in ('r', 'a', 'w', 'c'):
-            if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
-              self.events[m].set()
-              self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
-              self.gen.events[m].set()
+      del self
+      ws2.WSAWaitForMultipleEvents(ULONG(1), byref(e), BOOL(False), ULONG(-1), BOOL(False))
+      self = ref()
+      if self:
+        if not self.closed:
+          if ws2.WSAEnumNetworkEvents(f, e, byref(lpNetworkEvents)):
+            ws2.WSAResetEvent(e)
+          else:
+            for m in ('r', 'a', 'w', 'c'):
+              if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
+                self.events[m].set()
+                self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
+                self.gen.events[m].set()
+      else:
+        return
     for m in ('r', 'a', 'w', 'c'):
       self.events[m].set()
       self.gen.events[m].set()
+    del self
 
   def wait_start(self):
     self.mode = 'u'
-    t = threading.Thread(target=self._wait, daemon=True)
+    t = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
     t.start()
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
@@ -601,28 +612,51 @@ class IDSocketGenerator(ISocketGenerator):
 class NestedSSLContext(ssl.SSLContext):
 
   class SSLSocket(ssl.SSLSocket):
+  
+    _esocket = socket.socket()
+    _esocket.detach()
+  
+    def __new__(cls, *args, **kwargs):
+      if not hasattr(cls, 'sock'):
+        raise TypeError('%s does not have a public constructor. Instances are returned by NestedSSLContext.wrap_socket().' % cls.__name__)
+      cls_ = cls.__bases__[0]
+      self = super(cls_, cls_).__new__(cls_, *args, **kwargs)
+      self.socket = cls.sock
+      cls.sock = None
+      return self
 
     @classmethod
     def _create(cls, sock, *args, **kwargs):
-      class BoundSSLSocket(NestedSSLContext.SSLSocket):
-        def __new__(cls, *args, **kwargs):
-          self = super(cls, cls).__new__(cls, *args, **kwargs)
-          self.socket = sock
-          return self
       so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
       try:
         so.settimeout(sock.timeout)
       except:
         pass
-      self = ssl.SSLSocket._create.__func__(BoundSSLSocket, so, *args, **kwargs)
+      self = ssl.SSLSocket._create.__func__(type('BoundSSLSocket', (cls,), {'sock': sock}), so, *args, **kwargs)
       return self
 
+    def detach(self):
+      try:
+        self.socket.detach()
+      except:
+        pass
+      self._sslobj = None
+      self.socket = self._esocket
+      return super().detach()
+
+    def unwrap(self):
+      try:
+        sock = super().unwrap()
+        return sock
+      finally:
+        self.detach()
+
     def close(self):
-      self.detach()
       try:
         self.socket.close()
       except:
         pass
+      self.detach()
 
     def shutdown(self, how):
       super().shutdown(how)
@@ -632,7 +666,6 @@ class NestedSSLContext(ssl.SSLContext):
         pass
 
     def shutclose(self):
-      self.detach()
       try:
         if hasattr(self.socket, 'shutclose'):
           self.socket.shutclose()
@@ -641,6 +674,7 @@ class NestedSSLContext(ssl.SSLContext):
           self.socket.close()
       except:
         pass
+      self.detach()
 
     def settimeout(self, value):
       try:
@@ -693,10 +727,14 @@ class NestedSSLContext(ssl.SSLContext):
 
     def __init__(self, context, ssl_sock, server_side, server_hostname):
       self.context = context
-      self.sslsocket = ssl_sock
+      self._sslsocket = weakref.ref(ssl_sock)
       self.inc = ssl.MemoryBIO()
       self.out = ssl.MemoryBIO()
       self.sslobj = context.wrap_bio(self.inc, self.out, server_side, server_hostname)
+
+    @property
+    def sslsocket(self):
+      return self._sslsocket()
 
     def __getattr__(self, name):
       if name == 'is_isocket':
@@ -705,7 +743,7 @@ class NestedSSLContext(ssl.SSLContext):
       return self.sslobj._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context'):
+      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context'):
         object.__setattr__(self, name, value)
       else:
         self.sslobj._sslobj.__setattr__(name, value)
@@ -3015,10 +3053,7 @@ class NTPClient:
     except:
       return None
     finally:
-      try:
-        isocket.shutclose()
-      except:
-        pass
+      isocket.shutclose()
     ts = struct.unpack('>4L', r[32:48])
     ts1 = ts[0] - 2208988800 + ts[1] / 4294967296
     ts2 = ts[2] - 2208988800 + ts[3] / 4294967296
