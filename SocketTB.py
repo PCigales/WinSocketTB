@@ -753,7 +753,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     def __getattr__(self, name):
       if name == 'is_isocket':
-        self.is_isocket = isinstance(self.sslsocket.socket, ISocket) and False
+        self.is_isocket = isinstance(self.sslsocket.socket, ISocket)
         return self.is_isocket
       return self.sslobj._sslobj.__getattribute__(name)
 
@@ -763,39 +763,7 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         self.sslobj._sslobj.__setattr__(name, value)
 
-    # def _read_record(self, timeout):
-      # rt = timeout
-      # t = None
-      # def set_rt():
-        # nonlocal t
-        # nonlocal rt
-        # if t is None:
-          # if timeout is not None:
-            # t = time.monotonic()
-        # else:
-          # rt = timeout + t - time.monotonic()
-          # if rt < 0:
-            # raise TimeoutError(10060, 'timed out')
-      # bl = b''
-      # while len(bl) < 5:
-        # set_rt()
-        # b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(5 - len(bl))
-        # if not b_:
-          # raise ConnectionResetError
-        # bl += b_
-      # l = int.from_bytes(bl[3:5], 'big')
-      # self.inc.write(bl)
-      # if timeout is not None:
-        # rt = timeout = max(0, timeout + t - time.monotonic())
-      # t = None
-      # while l > 0:
-        # set_rt()
-        # b_ = self.sslsocket.socket.recv(l, timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(l)
-        # if not b_:
-          # raise ConnectionResetError
-        # l -= len(b_)
-        # self.inc.write(b_)
-
+ 
     def _read_record(self, timeout, sto):
       rt = timeout
       t = None
@@ -949,7 +917,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.DefaultSSLContext.__setattr__(name, value)
 
   def wrap_socket(self, sock, *args, **kwargs):
-    return ssl.SSLContext.wrap_socket(self.DefaultSSLContext if sock.__class__ == socket.socket and False else self, sock, *args, **kwargs)
+    return ssl.SSLContext.wrap_socket(self.DefaultSSLContext if sock.__class__ == socket.socket else self, sock, *args, **kwargs)
 
   def _wrap_socket(self, ssl_sock, server_side, server_hostname, *args, **kwargs):
     return NestedSSLContext._SSLSocket(self, ssl_sock, server_side, server_hostname)
@@ -1914,7 +1882,7 @@ class HTTPBaseRequest:
 
 def HTTPRequestConstructor(socket_source=socket, proxy=None):
   if not proxy or not proxy.get('ip', None):
-    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket or True else ssl.SSLContext, socket_source=socket_source):
+    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket else ssl.SSLContext, socket_source=socket_source):
       @classmethod
       def connect(cls, url, url_p, headers, timeout, max_hlength, end_time, pconnection, ip):
         if pconnection[0] is None:
