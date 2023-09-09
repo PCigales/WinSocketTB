@@ -136,10 +136,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       ws2.WSAEventSelect(SOCKET(self.sock_fileno), self.event, self.MODES.get(value, LONG(0)))
     else:
       ws2.WSACloseEvent(self.event)
-      try:
-        self.gen.isockets[self] = False
-      except:
-        pass
+      self.gen.isockets[self] = False
 
   def unwrap(self, timeout=''):
     with self.lock(timeout):
@@ -147,7 +144,6 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.closed = True
       sock = socket.socket(family=self.family, type=self.type, proto=self.proto, fileno=self.sock_fileno) if self.sock_fileno >= 0 else None
       self.detach()
-      self.sock_fileno = -1
     try:
       sock.settimeout(self.sock_timeout)
     except:
@@ -166,11 +162,11 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     ws2.WSASetEvent(self.event)
     with self.lock(None):
       self.mode = None
+    self.sock_fileno = -1
 
   def close(self):
     self._close()
     socket.socket.close(self)
-    self.sock_fileno = -1
 
   def shutclose(self):
     self._close()
@@ -182,7 +178,6 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       socket.socket.close(self)
     except:
       pass
-    self.sock_fileno = -1
 
   def detach(self):
     self._close()
@@ -378,7 +373,12 @@ class ISocketGenerator:
   def close(self):
     with self.lock:
       self.closed = True
+    fi = True
     for isock, activ in self.isockets.items():
+      if fi:
+        for isock_ in self.isockets:
+          isock_.closed = True
+        fi = False
       if activ:
         isock.shutclose()
 
@@ -517,6 +517,7 @@ class IDSocket(ISocket):
       self.events[m].clear()
       if self.closed:
         raise InterruptedError()
+      t = None
       while True:
         try:
           r = func(self, *args, **kwargs)
@@ -524,6 +525,12 @@ class IDSocket(ISocket):
             self.events[m].set()
           return r
         except BlockingIOError:
+          if rt is not None:
+            if t is None:
+              rt0 = rt
+              t = time.monotonic()
+            else:
+              rt = rt0 + t - time.monotonic()
           if self.events[m].wait(rt):
             if len(args) <= f or not (args[f] & socket.MSG_PEEK):
               self.events[m].clear()
@@ -542,6 +549,7 @@ class IDSocket(ISocket):
       self.events['a'].clear()
       if self.closed:
         raise InterruptedError()
+      t = None
       a = None
       while True:
         self.gettimeout = lambda : None
@@ -549,6 +557,12 @@ class IDSocket(ISocket):
           a = socket.socket.accept(self)
           break
         except BlockingIOError:
+          if rt is not None:
+            if t is None:
+              rt0 = rt
+              t = time.monotonic()
+            else:
+              rt = rt0 + t - time.monotonic()
           del self.gettimeout
           if self.events['a'].wait(rt):
             self.events['a'].clear()
