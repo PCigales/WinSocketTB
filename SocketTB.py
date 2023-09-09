@@ -763,8 +763,7 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         self.sslobj._sslobj.__setattr__(name, value)
 
- 
-    def _read_record(self, timeout, sto):
+     def _read_record(self, timeout, sto):
       rt = timeout
       t = None
       def set_rt():
