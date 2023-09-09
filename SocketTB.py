@@ -13,6 +13,7 @@ import types
 from functools import partial, partialmethod, reduce
 from contextlib import contextmanager
 import urllib.parse
+import email.utils
 from io import BytesIO
 import math
 import base64
@@ -752,7 +753,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     def __getattr__(self, name):
       if name == 'is_isocket':
-        self.is_isocket = isinstance(self.sslsocket.socket, ISocket)
+        self.is_isocket = isinstance(self.sslsocket.socket, ISocket) and False
         return self.is_isocket
       return self.sslobj._sslobj.__getattribute__(name)
 
@@ -762,7 +763,40 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         self.sslobj._sslobj.__setattr__(name, value)
 
-    def _read_record(self, timeout):
+    # def _read_record(self, timeout):
+      # rt = timeout
+      # t = None
+      # def set_rt():
+        # nonlocal t
+        # nonlocal rt
+        # if t is None:
+          # if timeout is not None:
+            # t = time.monotonic()
+        # else:
+          # rt = timeout + t - time.monotonic()
+          # if rt < 0:
+            # raise TimeoutError(10060, 'timed out')
+      # bl = b''
+      # while len(bl) < 5:
+        # set_rt()
+        # b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(5 - len(bl))
+        # if not b_:
+          # raise ConnectionResetError
+        # bl += b_
+      # l = int.from_bytes(bl[3:5], 'big')
+      # self.inc.write(bl)
+      # if timeout is not None:
+        # rt = timeout = max(0, timeout + t - time.monotonic())
+      # t = None
+      # while l > 0:
+        # set_rt()
+        # b_ = self.sslsocket.socket.recv(l, timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(l)
+        # if not b_:
+          # raise ConnectionResetError
+        # l -= len(b_)
+        # self.inc.write(b_)
+
+    def _read_record(self, timeout, sto):
       rt = timeout
       t = None
       def set_rt():
@@ -778,7 +812,13 @@ class NestedSSLContext(ssl.SSLContext):
       bl = b''
       while len(bl) < 5:
         set_rt()
-        b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(5 - len(bl))
+        if self.is_isocket:
+          b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt)
+        else:
+          if timeout is not None and sto - rt > 0.001:
+            sto = rt
+            self.sslsocket.socket.settimeout(rt)
+          b_ = self.sslsocket.socket.recv(5 - len(bl))
         if not b_:
           raise ConnectionResetError
         bl += b_
@@ -789,14 +829,21 @@ class NestedSSLContext(ssl.SSLContext):
       t = None
       while l > 0:
         set_rt()
-        b_ = self.sslsocket.socket.recv(l, timeout=rt) if self.is_isocket else self.sslsocket.socket.recv(l)
+        if self.is_isocket:
+          b_ = self.sslsocket.socket.recv(l, timeout=rt)
+        else:
+          if timeout is not None and sto - rt > 0.001:
+            sto = rt
+            self.sslsocket.socket.settimeout(rt)
+          b_ = self.sslsocket.socket.recv(l)
         if not b_:
           raise ConnectionResetError
         l -= len(b_)
         self.inc.write(b_)
+      return sto
 
     def interface(self, action, *args, **kwargs):
-      rt = timeout = self.sslsocket.gettimeout()
+      rt = timeout = sto = self.sslsocket.gettimeout()
       t = None
       def set_rt(z=False):
         nonlocal t
@@ -811,41 +858,55 @@ class NestedSSLContext(ssl.SSLContext):
               rt = 0
             else:
               raise TimeoutError(10060, 'timed out')
-      while True:
-        try:
-          res = action(*args, **kwargs)
-        except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
-          z = False
-          if self.out.pending:
-            z = True
-            set_rt()
-            if self.is_isocket:
-              self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
-            else:
-              self.sslsocket.socket.sendall(self.out.read())
-          elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
-            raise
-          if err.errno == ssl.SSL_ERROR_WANT_READ:
-            set_rt(z)
-            try:
-              if self.context.ssl_read_ahead:
-                if not (self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead, timeout=rt)) if self.is_isocket else self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead))):
-                  raise ConnectionResetError
+      try:
+        while True:
+          try:
+            res = action(*args, **kwargs)
+          except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
+            z = False
+            if self.out.pending:
+              z = True
+              set_rt()
+              if self.is_isocket:
+                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
               else:
-                self._read_record(rt)
-            except ConnectionResetError:
-              if action == self.sslobj._sslobj.do_handshake:
-                raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+                if timeout is not None:
+                  self.sslsocket.socket.settimeout(rt)
+                self.sslsocket.socket.sendall(self.out.read())
+            elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
+              raise
+            if err.errno == ssl.SSL_ERROR_WANT_READ:
+              set_rt(z)
+              try:
+                if self.context.ssl_read_ahead:
+                  if self.is_isocket:
+                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead, timeout=rt)):
+                      raise ConnectionResetError
+                  else:
+                    if timeout is not None:
+                      self.sslsocket.socket.settimeout(rt)
+                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead)):
+                      raise ConnectionResetError
+                else:
+                  sto = self._read_record(rt, sto)
+              except ConnectionResetError:
+                if action == self.sslobj._sslobj.do_handshake:
+                  raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+                else:
+                  raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
+          else:
+            if self.out.pending:
+              set_rt()
+              if self.is_isocket:
+                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
               else:
-                raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
-        else:
-          if self.out.pending:
-            set_rt()
-            if self.is_isocket:
-              self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
-            else:
-              self.sslsocket.socket.sendall(self.out.read())
-          return res
+                if timeout is not None:
+                  self.sslsocket.socket.settimeout(rt)
+                self.sslsocket.socket.sendall(self.out.read())
+            return res
+      finally:
+        if not self.is_isocket and timeout is not None:
+          self.sslsocket.socket.settimeout(timeout)
 
     def do_handshake(self):
       return self.interface(self.sslobj._sslobj.do_handshake)
@@ -888,7 +949,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.DefaultSSLContext.__setattr__(name, value)
 
   def wrap_socket(self, sock, *args, **kwargs):
-    return ssl.SSLContext.wrap_socket(self.DefaultSSLContext if sock.__class__ == socket.socket else self, sock, *args, **kwargs)
+    return ssl.SSLContext.wrap_socket(self.DefaultSSLContext if sock.__class__ == socket.socket and False else self, sock, *args, **kwargs)
 
   def _wrap_socket(self, ssl_sock, server_side, server_hostname, *args, **kwargs):
     return NestedSSLContext._SSLSocket(self, ssl_sock, server_side, server_hostname)
@@ -1036,28 +1097,26 @@ class HTTPMessage:
 
   @staticmethod
   def _read(message, max_data, end_time):
-    if end_time is None:
-      rem_time = None
-    else:
-      rem_time = end_time - time.monotonic()
-      if rem_time <= 0:
-        return None
     try:
-      message.settimeout(rem_time)
+      if end_time is not None:
+        rem_time = end_time - time.monotonic()
+        if rem_time <= 0:
+          return None
+        if message.gettimeout() - rem_time > 0.001:
+          message.settimeout(rem_time)
       return message.recv(min(max_data, 1048576))
     except:
       return None
 
   @staticmethod
   def _write(message, msg, end_time):
-    if end_time is None:
-      rem_time = None
-    else:
-      rem_time = end_time - time.monotonic()
-      if rem_time <= 0:
-        return None
     try:
-      message.settimeout(rem_time)
+      if end_time is not None:
+        rem_time = end_time - time.monotonic()
+        if rem_time <= 0:
+          return None
+        if message.gettimeout() - rem_time > 0.001:
+          message.settimeout(rem_time)
       message.sendall(msg)
       return len(msg)
     except:
@@ -1071,10 +1130,18 @@ class HTTPMessage:
       exceeded = None
     if message is None:
       return http_message
-    end_time = time.monotonic() + max_time if max_time is not None else None
+    iss = isinstance(message, socket.socket)
+    if max_time is None:
+      end_time = None
+      if iss:
+        try:
+          message.settimeout(None)
+        except:
+          return http_message
+    else:
+      end_time = time.monotonic() + max_time
     max_hlength = min(max_length, max_hlength)
     rem_length = max_hlength
-    iss = isinstance(message, socket.socket)
     if not iss:
       msg = message[0]
     else:
@@ -1133,7 +1200,7 @@ class HTTPMessage:
         if not ce in ('deflate', 'gzip'):
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), min(time.monotonic() + 3, end_time))
+              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           return http_message.clear()
@@ -1148,7 +1215,7 @@ class HTTPMessage:
           return http_message.clear()
       else:
         try:
-          cls._write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), min(time.monotonic() + 3, end_time))
+          cls._write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
         except:
           pass
         if exceeded is not None:
@@ -1289,7 +1356,7 @@ class HTTPMessage:
       except:
         if http_message.method is not None and iss:
           try:
-            cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), min(time.monotonic() + 3, end_time))
+            cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
           except:
             pass
         return http_message.clear()
@@ -1302,9 +1369,17 @@ class HTTPStreamMessage(HTTPMessage):
     http_message = HTTPExplodedMessage()
     if message is None:
       return http_message
-    end_time = time.monotonic() + max_time if max_time is not None else None
-    rem_length = max_hlength
     iss = isinstance(message, socket.socket)
+    if max_time is None:
+      end_time = None
+      if iss:
+        try:
+          message.settimeout(None)
+        except:
+          return http_message
+    else:
+      end_time = time.monotonic() + max_time
+    rem_length = max_hlength
     if not iss:
       msg = message[0]
     else:
@@ -1358,7 +1433,7 @@ class HTTPStreamMessage(HTTPMessage):
         if not ce in ('deflate', 'gzip'):
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), min(time.monotonic() + 3, end_time))
+              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           return http_message.clear()
@@ -1400,7 +1475,7 @@ class HTTPStreamMessage(HTTPMessage):
         except:
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), min(time.monotonic() + 3, end_time))
+              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           raise
@@ -1411,6 +1486,7 @@ class HTTPStreamMessage(HTTPMessage):
         length = yield None
       else:
         return b''
+      new_iter = True
       if not chunked:
         if body_len < 0:
           try:
@@ -1421,7 +1497,11 @@ class HTTPStreamMessage(HTTPMessage):
             while True:
               while bbuf.pending > length:
                 length = yield bbuf.read(length)
+                new_iter = True
               try:
+                if new_iter and end_time is None:
+                  new_iter = False
+                  message.settimeout(None)
                 bw = bbuf_write(cls._read(message, 1048576, end_time))
                 if not bw:
                   break
@@ -1441,7 +1521,11 @@ class HTTPStreamMessage(HTTPMessage):
           while body_len:
             while bbuf.pending >= length:
               length = yield bbuf.read(length)
+              new_iter = True
             try:
+              if new_iter and end_time is None:
+                new_iter = False
+                message.settimeout(None)
               bw = bbuf_write(cls._read(message, min(body_len, 1048576), end_time))
               if not bw:
                 raise
@@ -1475,6 +1559,9 @@ class HTTPStreamMessage(HTTPMessage):
                 length = yield bbuf.read(length)
               error(bbuf.read())
             try:
+              if new_iter and end_time is None:
+                new_iter = False
+                message.settimeout(None)
               bloc = cls._read(message, min(rem_slength, 1048576), end_time)
               if not bloc:
                 raise
@@ -1504,7 +1591,11 @@ class HTTPStreamMessage(HTTPMessage):
             while chunk_len:
               while bbuf.pending >= length:
                 length = yield bbuf.read(length)
+                new_iter = True
               try:
+                if new_iter and end_time is None:
+                  new_iter = False
+                  message.settimeout(None)
                 bw = bbuf_write(cls._read(message, min(chunk_len, 1048576), end_time))
                 if not bw:
                   raise
@@ -1522,12 +1613,16 @@ class HTTPStreamMessage(HTTPMessage):
             length = yield bbuf.read(length)
         while bbuf.pending > length:
           length = yield bbuf.read(length)
+        new_iter = True
         while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
           if not iss:
             if bbuf.pending == length:
               length = yield bbuf.read(length)
             error(bbuf.read())
           try:
+            if new_iter and end_time is None:
+              new_iter = False
+              message.settimeout(None)
             bloc = cls._read(message, 1048576, end_time)
             if not bloc:
               raise
@@ -1551,11 +1646,11 @@ class HTTPStreamMessage(HTTPMessage):
       if math.isnan(body.__defaults__[0]):
         return None
       if not length:
-        if body.__defaults__ == (0, False) and callback is not None:
+        if body.__defaults__[0] == 0 and callback is not None:
           callback()
         return b''
       elif length > 0:
-        end_time = time.monotonic() + max_time if max_time is not None else None
+        end_time = None if max_time is None else time.monotonic() + max_time
         try:
           return bg.send(length)
         except StopIteration as e:
@@ -1563,7 +1658,7 @@ class HTTPStreamMessage(HTTPMessage):
             callback()
           return e.value or b''
         except GeneratorExit as e:
-          body.__defaults__ = (float('nan'), False)
+          body.__defaults__ = (float('nan'), None, False)
           if callback is not None:
             callback()
           return e.value if return_pending_on_error else None
@@ -1574,7 +1669,7 @@ class HTTPStreamMessage(HTTPMessage):
         return b''
       else:
         bg.close()
-        body.__defaults__ = (float('nan'), False)
+        body.__defaults__ = (float('nan'), None, False)
         if callback is not None:
           callback()
         return None
@@ -1582,7 +1677,7 @@ class HTTPStreamMessage(HTTPMessage):
     try:
       bg.send(None)
     except StopIteration:
-      body.__defaults__ = (0, False)
+      body.__defaults__ = (0, None, False)
     return http_message
 
 
@@ -1819,7 +1914,7 @@ class HTTPBaseRequest:
 
 def HTTPRequestConstructor(socket_source=socket, proxy=None):
   if not proxy or not proxy.get('ip', None):
-    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket else ssl.SSLContext, socket_source=socket_source):
+    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket or True else ssl.SSLContext, socket_source=socket_source):
       @classmethod
       def connect(cls, url, url_p, headers, timeout, max_hlength, end_time, pconnection, ip):
         if pconnection[0] is None:
