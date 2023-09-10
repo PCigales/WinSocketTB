@@ -1097,10 +1097,9 @@ class HTTPMessage:
       exceeded = None
     if message is None:
       return http_message
-    if max_time is None:
-      end_time = None
-    else:
-      end_time = time.monotonic() + max_time
+    if max_time is False:
+      max_time = None
+    end_time = None if max_time is None else time.monotonic() + max_time
     iss = isinstance(message, socket.socket)
     max_hlength = min(max_length, max_hlength)
     rem_length = max_hlength
@@ -1335,10 +1334,9 @@ class HTTPStreamMessage(HTTPMessage):
     http_message = HTTPExplodedMessage()
     if message is None:
       return http_message
-    if max_time is None:
-      end_time = None
-    else:
-      end_time = time.monotonic() + max_time
+    if max_time is False:
+      max_time = None
+    end_time = None if max_time is None else time.monotonic() + max_time
     iss = isinstance(message, socket.socket)
     rem_length = max_hlength
     if not iss:
@@ -1413,7 +1411,6 @@ class HTTPStreamMessage(HTTPMessage):
       except:
         return http_message.clear()
     bbuf = ssl.MemoryBIO()
-    new_to = False
     def _body():
       def error(value=None):
         e = GeneratorExit()
@@ -1448,9 +1445,10 @@ class HTTPStreamMessage(HTTPMessage):
         else:
           return len(data)
       nonlocal body_len
-      nonlocal new_to
+      nonlocal end_time
       if body_len != 0:
-        length = yield None
+        length, max_time = yield None
+        end_time = None if max_time is None else time.monotonic() + max_time
       else:
         return b''
       if not chunked:
@@ -1462,17 +1460,18 @@ class HTTPStreamMessage(HTTPMessage):
           if iss:
             while True:
               while bbuf.pending > length:
-                length = yield bbuf.read(length)
+                length, max_time = yield bbuf.read(length)
+                end_time = None if max_time is None else time.monotonic() + max_time
               try:
-                if new_to is not False:
-                  message.settimeout(new_to)
-                  new_to = False
+                if max_time is not False:
+                  message.settimeout(max_time)
+                  max_time = False
                 bw = bbuf_write(cls._read(message, 1048576, end_time))
                 if not bw:
                   break
               except:
                 if bbuf.pending == length:
-                  length = yield bbuf.read(length)
+                  length, max_time = yield bbuf.read(length)
                 error(bbuf.read())
         elif len(msg) < body_pos + body_len:
           try:
@@ -1481,15 +1480,16 @@ class HTTPStreamMessage(HTTPMessage):
             error()
           if not iss:
             while bbuf.pending >= length:
-              length = yield bbuf.read(length)
+              length, max_time = yield bbuf.read(length)
             error(bbuf.read())
           while body_len:
             while bbuf.pending >= length:
-              length = yield bbuf.read(length)
+              length, max_time = yield bbuf.read(length)
+              end_time = None if max_time is None else time.monotonic() + max_time
             try:
-              if new_to is not False:
-                message.settimeout(new_to)
-                new_to = False
+              if max_time is not False:
+                message.settimeout(max_time)
+                max_time = False
               bw = bbuf_write(cls._read(message, min(body_len, 1048576), end_time))
               if not bw:
                 raise
@@ -1502,7 +1502,8 @@ class HTTPStreamMessage(HTTPMessage):
           except:
             error()
         while bbuf.pending > length:
-          length = yield bbuf.read(length)
+          length, max_time = yield bbuf.read(length)
+          end_time = None if max_time is None else time.monotonic() + max_time
       else:
         buff = msg[body_pos:]
         while True:
@@ -1520,18 +1521,18 @@ class HTTPStreamMessage(HTTPMessage):
               break
             if not iss or rem_slength <= 0:
               if bbuf.pending == length:
-                length = yield bbuf.read(length)
+                length, max_time = yield bbuf.read(length)
               error(bbuf.read())
             try:
-              if new_to is not False:
-                message.settimeout(new_to)
-                new_to = False
+              if max_time is not False:
+                message.settimeout(max_time)
+                max_time = False
               bloc = cls._read(message, min(rem_slength, 1048576), end_time)
               if not bloc:
                 raise
             except:
               if bbuf.pending == length:
-                length = yield bbuf.read(length)
+                length, max_time = yield bbuf.read(length)
               error(bbuf.read())
             rem_slength -= len(bloc)
             buff = buff + bloc
@@ -1541,7 +1542,7 @@ class HTTPStreamMessage(HTTPMessage):
               break
           except:
             if bbuf.pending == length:
-              length = yield bbuf.read(length)
+              length, max_time = yield bbuf.read(length)
             error(bbuf.read())
           if len(buff) < chunk_pos + chunk_len:
             try:
@@ -1550,15 +1551,16 @@ class HTTPStreamMessage(HTTPMessage):
               error(bbuf.read())
             if not iss:
               while bbuf.pending >= length:
-                length = yield bbuf.read(length)
+                length, max_time = yield bbuf.read(length)
               error(bbuf.read())
             while chunk_len:
               while bbuf.pending >= length:
-                length = yield bbuf.read(length)
+                length, max_time = yield bbuf.read(length)
+                end_time = None if max_time is None else time.monotonic() + max_time
               try:
-                if new_to is not False:
-                  message.settimeout(new_to)
-                  new_to = False
+                if max_time is not False:
+                  message.settimeout(max_time)
+                  max_time = False
                 bw = bbuf_write(cls._read(message, min(chunk_len, 1048576), end_time))
                 if not bw:
                   raise
@@ -1573,24 +1575,26 @@ class HTTPStreamMessage(HTTPMessage):
               error(bbuf.read())
             buff = buff[chunk_pos+chunk_len:]
           while bbuf.pending > length:
-            length = yield bbuf.read(length)
+            length, max_time = yield bbuf.read(length)
+            end_time = None if max_time is None else time.monotonic() + max_time
         while bbuf.pending > length:
-          length = yield bbuf.read(length)
+          length, max_time = yield bbuf.read(length)
+          end_time = None if max_time is None else time.monotonic() + max_time
         while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
           if not iss:
             if bbuf.pending == length:
-              length = yield bbuf.read(length)
+              length, max_time = yield bbuf.read(length)
             error(bbuf.read())
           try:
-            if new_to is not False:
-              message.settimeout(new_to)
-              new_to = False
+            if max_time is not False:
+              message.settimeout(max_time)
+              max_time = False
             bloc = cls._read(message, 1048576, end_time)
             if not bloc:
               raise
           except:
             if bbuf.pending == length:
-              length = yield bbuf.read(length)
+              length, max_time = yield bbuf.read(length)
             error(bbuf.read())
           buff = buff + bloc
         if len(buff) - chunk_pos > 2:
@@ -1604,19 +1608,17 @@ class HTTPStreamMessage(HTTPMessage):
       return bbuf.read()
     bg = _body()
     def body(length=float('inf'), max_time=None, return_pending_on_error=False, *, callback=None):
-      nonlocal end_time
-      nonlocal new_to
       if math.isnan(body.__defaults__[0]):
         return None
+      if max_time is False:
+        max_time = None
       if not length:
         if body.__defaults__[0] == 0 and callback is not None:
           callback()
         return b''
       elif length > 0:
-        end_time = None if max_time is None else time.monotonic() + max_time
         try:
-          new_to = max_time
-          return bg.send(length)
+          return bg.send((length, max_time))
         except StopIteration as e:
           if callback is not None:
             callback()
