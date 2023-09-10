@@ -1069,7 +1069,7 @@ class HTTPMessage:
         rem_time = end_time - time.monotonic()
         if rem_time <= 0:
           return None
-        if message.gettimeout() - rem_time > 0.001:
+        if abs(message.gettimeout() - rem_time) > 0.001:
           message.settimeout(rem_time)
       return message.recv(min(max_data, 1048576))
     except:
@@ -1082,7 +1082,7 @@ class HTTPMessage:
         rem_time = end_time - time.monotonic()
         if rem_time <= 0:
           return None
-        if message.gettimeout() - rem_time > 0.001:
+        if abs(message.gettimeout() - rem_time) > 0.001:
           message.settimeout(rem_time)
       message.sendall(msg)
       return len(msg)
@@ -1097,22 +1097,21 @@ class HTTPMessage:
       exceeded = None
     if message is None:
       return http_message
-    iss = isinstance(message, socket.socket)
     if max_time is None:
       end_time = None
-      if iss:
-        try:
-          message.settimeout(None)
-        except:
-          return http_message
     else:
       end_time = time.monotonic() + max_time
+    iss = isinstance(message, socket.socket)
     max_hlength = min(max_length, max_hlength)
     rem_length = max_hlength
     if not iss:
       msg = message[0]
     else:
       msg = b''
+      try:
+        message.settimeout(max_time)
+      except:
+        return http_message
     while True:
       msg = msg.lstrip(b'\r\n')
       if msg and msg[0] < 0x20:
@@ -1336,21 +1335,20 @@ class HTTPStreamMessage(HTTPMessage):
     http_message = HTTPExplodedMessage()
     if message is None:
       return http_message
-    iss = isinstance(message, socket.socket)
     if max_time is None:
       end_time = None
-      if iss:
-        try:
-          message.settimeout(None)
-        except:
-          return http_message
     else:
       end_time = time.monotonic() + max_time
+    iss = isinstance(message, socket.socket)
     rem_length = max_hlength
     if not iss:
       msg = message[0]
     else:
       msg = b''
+      try:
+        message.settimeout(max_time)
+      except:
+        return http_message
     while True:
       msg = msg.lstrip(b'\r\n')
       body_pos = msg.find(b'\r\n\r\n')
@@ -1415,6 +1413,7 @@ class HTTPStreamMessage(HTTPMessage):
       except:
         return http_message.clear()
     bbuf = ssl.MemoryBIO()
+    new_to = False
     def _body():
       def error(value=None):
         e = GeneratorExit()
@@ -1449,11 +1448,11 @@ class HTTPStreamMessage(HTTPMessage):
         else:
           return len(data)
       nonlocal body_len
+      nonlocal new_to
       if body_len != 0:
         length = yield None
       else:
         return b''
-      new_iter = True
       if not chunked:
         if body_len < 0:
           try:
@@ -1464,11 +1463,10 @@ class HTTPStreamMessage(HTTPMessage):
             while True:
               while bbuf.pending > length:
                 length = yield bbuf.read(length)
-                new_iter = True
               try:
-                if new_iter and end_time is None:
-                  new_iter = False
-                  message.settimeout(None)
+                if new_to is not False:
+                  message.settimeout(new_to)
+                  new_to = False
                 bw = bbuf_write(cls._read(message, 1048576, end_time))
                 if not bw:
                   break
@@ -1488,11 +1486,10 @@ class HTTPStreamMessage(HTTPMessage):
           while body_len:
             while bbuf.pending >= length:
               length = yield bbuf.read(length)
-              new_iter = True
             try:
-              if new_iter and end_time is None:
-                new_iter = False
-                message.settimeout(None)
+              if new_to is not False:
+                message.settimeout(new_to)
+                new_to = False
               bw = bbuf_write(cls._read(message, min(body_len, 1048576), end_time))
               if not bw:
                 raise
@@ -1526,9 +1523,9 @@ class HTTPStreamMessage(HTTPMessage):
                 length = yield bbuf.read(length)
               error(bbuf.read())
             try:
-              if new_iter and end_time is None:
-                new_iter = False
-                message.settimeout(None)
+              if new_to is not False:
+                message.settimeout(new_to)
+                new_to = False
               bloc = cls._read(message, min(rem_slength, 1048576), end_time)
               if not bloc:
                 raise
@@ -1558,11 +1555,10 @@ class HTTPStreamMessage(HTTPMessage):
             while chunk_len:
               while bbuf.pending >= length:
                 length = yield bbuf.read(length)
-                new_iter = True
               try:
-                if new_iter and end_time is None:
-                  new_iter = False
-                  message.settimeout(None)
+                if new_to is not False:
+                  message.settimeout(new_to)
+                  new_to = False
                 bw = bbuf_write(cls._read(message, min(chunk_len, 1048576), end_time))
                 if not bw:
                   raise
@@ -1580,16 +1576,15 @@ class HTTPStreamMessage(HTTPMessage):
             length = yield bbuf.read(length)
         while bbuf.pending > length:
           length = yield bbuf.read(length)
-        new_iter = True
         while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
           if not iss:
             if bbuf.pending == length:
               length = yield bbuf.read(length)
             error(bbuf.read())
           try:
-            if new_iter and end_time is None:
-              new_iter = False
-              message.settimeout(None)
+            if new_to is not False:
+              message.settimeout(new_to)
+              new_to = False
             bloc = cls._read(message, 1048576, end_time)
             if not bloc:
               raise
@@ -1610,6 +1605,7 @@ class HTTPStreamMessage(HTTPMessage):
     bg = _body()
     def body(length=float('inf'), max_time=None, return_pending_on_error=False, *, callback=None):
       nonlocal end_time
+      nonlocal new_to
       if math.isnan(body.__defaults__[0]):
         return None
       if not length:
@@ -1619,6 +1615,7 @@ class HTTPStreamMessage(HTTPMessage):
       elif length > 0:
         end_time = None if max_time is None else time.monotonic() + max_time
         try:
+          new_to = max_time
           return bg.send(length)
         except StopIteration as e:
           if callback is not None:
