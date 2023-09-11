@@ -815,7 +815,7 @@ class NestedSSLContext(ssl.SSLContext):
         if self.is_isocket:
           b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt)
         else:
-          if timeout is not None and sto - rt > 0.001:
+          if timeout is not None and sto - rt > 0.005:
             sto = rt
             self.sslsocket.socket.settimeout(rt)
           b_ = self.sslsocket.socket.recv(5 - len(bl))
@@ -832,7 +832,7 @@ class NestedSSLContext(ssl.SSLContext):
         if self.is_isocket:
           b_ = self.sslsocket.socket.recv(l, timeout=rt)
         else:
-          if timeout is not None and sto - rt > 0.001:
+          if timeout is not None and sto - rt > 0.005:
             sto = rt
             self.sslsocket.socket.settimeout(rt)
           b_ = self.sslsocket.socket.recv(l)
@@ -1102,7 +1102,7 @@ class HTTPMessage:
         rem_time = end_time - time.monotonic()
         if rem_time <= 0:
           return None
-        if abs(message.gettimeout() - rem_time) > 0.001:
+        if abs(message.gettimeout() - rem_time) > 0.005:
           message.settimeout(rem_time)
       return message.recv(min(max_data, 1048576))
     except:
@@ -1115,7 +1115,7 @@ class HTTPMessage:
         rem_time = end_time - time.monotonic()
         if rem_time <= 0:
           return None
-        if abs(message.gettimeout() - rem_time) > 0.001:
+        if abs(message.gettimeout() - rem_time) > 0.005:
           message.settimeout(rem_time)
       message.sendall(msg)
       return len(msg)
