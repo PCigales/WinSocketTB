@@ -1,8 +1,8 @@
 # WinSocketTB
 A module in Python 3 consisting of a toolbox to handle sockets under Windows for various purposes
 
-1. Interruptible sockets: ISocketGenerator
-2. Interruptible duplex sockets: IDSocketGenerator
+1. Interruptible thread-safe sockets: ISocketGenerator
+2. Interruptible thread-safe duplex sockets: IDSocketGenerator
 3. Nested SSL/TLS context: NestedSSLContext
 4. HTTP message parser: HTTPMessage and HTTPStreamMessage
 5. HTTP request compatible with proxy: HTTPRequestConstructor
