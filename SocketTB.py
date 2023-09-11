@@ -10,8 +10,7 @@ import weakref
 import time
 import datetime
 import types
-from functools import partial, partialmethod, reduce
-from contextlib import contextmanager
+from functools import reduce
 import urllib.parse
 import email.utils
 from io import BytesIO
@@ -78,12 +77,19 @@ P_CERT_CONTEXT = POINTER(CERT_CONTEXT)
 
 class ISocketMeta(type):
 
+  def func_wrap(cls, mode, func, f):
+    def w(self, *args, timeout='', **kwargs):
+      return cls._func_wrap(self, mode, func, f, *args, timeout=timeout, **kwargs)
+    w.__name__ = func.__name__
+    w.__qualname__ = cls._func_wrap.__qualname__[:-10] + func.__name__
+    return w
+
   def __init__(cls, *args, **kwargs):
     type.__init__(cls, *args, **kwargs)
     for name in ('recv', 'recvfrom', 'recv_into', 'recvfrom_into'):
-      setattr(cls, name, partialmethod(cls._func_wrap, 'r', getattr(socket.socket, name), 2 if name[-4:] == 'into' else 1))
+      setattr(cls, name, cls.func_wrap('r', getattr(socket.socket, name), 2 if name[-4:] == 'into' else 1))
     for name in ('send', 'sendto'):
-      setattr(cls, name, partialmethod(cls._func_wrap, 'w', getattr(socket.socket, name), float('inf')))
+      setattr(cls, name, cls.func_wrap('w', getattr(socket.socket, name), float('inf')))
     def attribute_error(self, *args, **kwargs):
       raise NotImplementedError()
     for name in ('dup', 'makefile', 'connect_ex', 'ioctl', 'share'):
@@ -106,25 +112,23 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     self.closed = False
     gen.isockets[self] = True
 
-  @contextmanager
   def lock(self, timeout=''):
     if timeout == '':
       timeout = self.sock_timeout
     t = time.monotonic()
     a = self._lock.acquire(timeout=(timeout if timeout is not None else -1))
-    try:
-      if a:
-        yield None if timeout is None else max(0, timeout + t - time.monotonic())
-      else:
-        raise InterruptedError() if self.closed else TimeoutError()
-    finally:
-      if a:
-        self._lock.release()
+    if a:
+      return (None if timeout is None else max(0, timeout + t - time.monotonic())), (lambda : self._lock.release())
+    else:
+      raise InterruptedError() if self.closed else TimeoutError()
 
   @property
   def mode(self):
-    with self.lock(None):
+    rt, ul = self.lock(None)
+    try:
       return self._mode if not self.closed else None
+    finally:
+      ul()
 
   @mode.setter
   def mode(self, value):
@@ -140,11 +144,14 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.gen.isockets[self] = False
 
   def unwrap(self, timeout=''):
-    with self.lock(timeout):
+    rt, ul = self.lock(timeout)
+    try:
       self.mode = None
       self.closed = True
       sock = socket.socket(family=self.family, type=self.type, proto=self.proto, fileno=self.sock_fileno) if self.sock_fileno >= 0 else None
       self.detach()
+    finally:
+      ul()
     try:
       sock.settimeout(self.sock_timeout)
     except:
@@ -152,17 +159,21 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     return sock
 
   def shutdown(self, *args, timeout='', **kwargs):
-    with self.lock(timeout):
+    rt, ul = self.lock(timeout)
+    try:
       if not self.closed:
         socket.socket.shutdown(self, *args, **kwargs)
       else:
         raise InterruptedError()
+    finally:
+      ul()
 
   def _close(self):
     self.closed = True
     ws2.WSASetEvent(self.event)
-    with self.lock(None):
-      self.mode = None
+    rt, ul = self.lock(None)
+    self.mode = None
+    ul()
     self.sock_fileno = -1
 
   def close(self):
@@ -220,7 +231,8 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       return True
 
   def _func_wrap(self, mode, func, f, *args, timeout='', **kwargs):
-    with self.lock(timeout) as rt:
+    rt, ul = self.lock(timeout)
+    try:
       if self.closed:
         raise InterruptedError()
       self.mode = mode
@@ -236,6 +248,8 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
             ws2.WSASetEvent(self.event)
           return func(self, *args, **kwargs)
       raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      ul()
 
   def _sendall(self, bytes, *args, timeout=None, **kwargs):
     t = time.monotonic()
@@ -251,11 +265,15 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           rt = timeout + t - time.monotonic()
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
-    with self.lock(timeout) as rt:
+    rt, ul = self.lock(timeout)
+    try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
+    finally:
+      ul()
 
   def accept(self, timeout=''):
-    with self.lock(timeout) as rt:
+    rt, ul = self.lock(timeout)
+    try:
       if self.closed:
         raise InterruptedError()
       self.mode = 'a'
@@ -280,9 +298,12 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         isock.mode = 'r'
         return (isock, a[1])
       raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      ul()
 
   def connect(self, *args, timeout='', **kwargs):
-    with self.lock(timeout) as rt:
+    rt, ul = self.lock(timeout)
+    try:
       if self.closed:
         raise InterruptedError()
       self.mode = 'c'
@@ -298,6 +319,8 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           else:
             raise ConnectionRefusedError()
       raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      ul()
 
   @classmethod
   def _wait_for_events(cls, timeout, events, event_c=None):
@@ -444,7 +467,6 @@ class IDSocket(ISocket):
     self.errors = {m: 0 for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
-  @contextmanager
   def lock(self, timeout='', mode='u'):
     th = threading.current_thread()
     pred = lambda : (mode == 'w' or not self._queue_r or self._queue_r[0][0] == th) and (mode == 'r' or not self._queue_w or self._queue_w[0][0] == th)
@@ -462,22 +484,21 @@ class IDSocket(ISocket):
       a = pred()
       if not a:
         a = self._condition.wait_for(pred, timeout)
-    try:
-      if a:
-        yield None if timeout is None else timeout + t - time.monotonic()
-      else:
-        raise InterruptedError() if self.closed else TimeoutError()
-    finally:
-      with self._condition:
-        if a_r is not None:
-          a_r[0] = None
-          while self._queue_r and self._queue_r[0][0] is None:
-            del self._queue_r[0]
-        if a_w is not None:
-          a_w[0] = None
-          while self._queue_w and self._queue_w[0][0] is None:
-            del self._queue_w[0]
-        self._condition.notify_all()
+    if a:
+      def ul():
+        with self._condition:
+          if a_r is not None:
+            a_r[0] = None
+            while self._queue_r and self._queue_r[0][0] is None:
+              del self._queue_r[0]
+          if a_w is not None:
+            a_w[0] = None
+            while self._queue_w and self._queue_w[0][0] is None:
+              del self._queue_w[0]
+          self._condition.notify_all()
+      return (None if timeout is None else timeout + t - time.monotonic()), ul
+    else:
+      raise InterruptedError() if self.closed else TimeoutError()
 
   @staticmethod
   def _wait(ref):
@@ -514,7 +535,8 @@ class IDSocket(ISocket):
     t.start()
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
-    with self.lock(timeout, m) as rt:
+    rt, ul = self.lock(timeout, m)
+    try:
       self.events[m].clear()
       if self.closed:
         raise InterruptedError()
@@ -540,13 +562,19 @@ class IDSocket(ISocket):
           else:
             break
       raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      ul()
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
-    with self.lock(timeout, 'w') as rt:
+    rt, ul = self.lock(timeout, 'w')
+    try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
+    finally:
+      ul()
 
   def accept(self, timeout=''):
-    with self.lock(timeout, 'a') as rt:
+    rt, ul = self.lock(timeout, 'a')
+    try:
       self.events['a'].clear()
       if self.closed:
         raise InterruptedError()
@@ -581,9 +609,12 @@ class IDSocket(ISocket):
         isock.settimeout(self.timeout)        
         return (isock, a[1])
       raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      ul()
 
   def connect(self, *args, timeout='', **kwargs):
-    with self.lock(timeout, 'c') as rt:
+    rt, ul =  self.lock(timeout, 'c')
+    try:
       self.events['c'].clear()
       if self.closed:
         raise InterruptedError()
@@ -596,6 +627,8 @@ class IDSocket(ISocket):
           raise InterruptedError() if self.closed else TimeoutError()
         elif self.errors['c']:
           raise ConnectionRefusedError()
+    finally:
+      ul()
 
   @classmethod
   def waitmult(cls, *args, **kwargs):
@@ -1683,7 +1716,7 @@ class HTTPBaseRequest:
       raise TimeoutError()
     return rem_time
 
-  def __new__(cls, url, method=None, headers=None, data=None, timeout=30, max_length=1048576, max_hlength=1048576, max_time=None, decompress=True, pconnection=None, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None):
+  def __new__(cls, url, method=None, headers=None, data=None, timeout=30, max_length=16777216, max_hlength=1048576, max_time=None, decompress=True, pconnection=None, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None):
     if url is None:
       return HTTPMessage()
     if method is None:
