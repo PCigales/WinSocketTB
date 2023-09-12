@@ -932,12 +932,6 @@ class NestedSSLContext(ssl.SSLContext):
     def read(self, length=16384, buffer=None):
       return self.interface(self.sslobj._sslobj.read, length) if buffer is None else self.interface(self.sslobj._sslobj.read, length, buffer)
 
-    # def write(self, bytes):
-      # w = self.sslobj._sslobj.write(bytes)
-      # if self.out.pending:
-        # self.sslsocket.socket.sendall(self.out.read())
-      # return w
-
     def write(self, bytes):
       return self.interface(self.sslobj._sslobj.write, bytes)
 
