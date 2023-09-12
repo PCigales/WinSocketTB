@@ -7,6 +7,7 @@ import ssl
 import ctypes, ctypes.wintypes
 import threading
 import weakref
+from collections import deque
 import time
 import datetime
 import types
@@ -118,9 +119,12 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     t = time.monotonic()
     a = self._lock.acquire(timeout=(timeout if timeout is not None else -1))
     if a:
-      return (None if timeout is None else max(0, timeout + t - time.monotonic())), (lambda : self._lock.release())
+      return (None if timeout is None else max(0, timeout + t - time.monotonic())), None
     else:
       raise InterruptedError() if self.closed else TimeoutError()
+
+  def unlock(self, ul):
+    self._lock.release()
 
   @property
   def mode(self):
@@ -128,7 +132,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     try:
       return self._mode if not self.closed else None
     finally:
-      ul()
+      self.unlock(ul)
 
   @mode.setter
   def mode(self, value):
@@ -151,7 +155,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       sock = socket.socket(family=self.family, type=self.type, proto=self.proto, fileno=self.sock_fileno) if self.sock_fileno >= 0 else None
       self.detach()
     finally:
-      ul()
+      self.unlock(ul)
     try:
       sock.settimeout(self.sock_timeout)
     except:
@@ -166,14 +170,14 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       else:
         raise InterruptedError()
     finally:
-      ul()
+      self.unlock(ul)
 
   def _close(self):
     self.closed = True
     ws2.WSASetEvent(self.event)
     rt, ul = self.lock(None)
     self.mode = None
-    ul()
+    self.unlock(ul)
     self.sock_fileno = -1
 
   def close(self):
@@ -249,7 +253,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           return func(self, *args, **kwargs)
       raise InterruptedError() if self.closed else TimeoutError()
     finally:
-      ul()
+      self.unlock(ul)
 
   def _sendall(self, bytes, *args, timeout=None, **kwargs):
     t = time.monotonic()
@@ -269,7 +273,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
     finally:
-      ul()
+      self.unlock(ul)
 
   def accept(self, timeout=''):
     rt, ul = self.lock(timeout)
@@ -299,7 +303,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         return (isock, a[1])
       raise InterruptedError() if self.closed else TimeoutError()
     finally:
-      ul()
+      self.unlock(ul)
 
   def connect(self, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout)
@@ -320,7 +324,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
             raise ConnectionRefusedError()
       raise InterruptedError() if self.closed else TimeoutError()
     finally:
-      ul()
+      self.unlock(ul)
 
   @classmethod
   def _wait_for_events(cls, timeout, events, event_c=None):
@@ -461,15 +465,20 @@ class IDSocket(ISocket):
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     super().__init__(gen, family, type, proto, fileno, timeout)
     self._condition = threading.Condition(self._lock)
-    self._queue_r = []
-    self._queue_w = []
+    self._queue_r = deque()
+    self._queue_w = deque()
     self.events = {m: threading.Event() for m in ('r', 'a', 'w', 'c')}
     self.errors = {m: 0 for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
   def lock(self, timeout='', mode='u'):
     th = threading.current_thread()
-    pred = lambda : (mode == 'w' or not self._queue_r or self._queue_r[0][0] == th) and (mode == 'r' or not self._queue_w or self._queue_w[0][0] == th)
+    if mode == 'r':
+      pred = lambda : self._queue_r[0][0] == th
+    elif mode == 'w':
+      pred = lambda : self._queue_w[0][0] == th
+    else:
+      pred = lambda : self._queue_r[0][0] == th and self._queue_w[0][0] == th
     if timeout == '':
       timeout = self.sock_timeout
     t = time.monotonic()
@@ -485,20 +494,22 @@ class IDSocket(ISocket):
       if not a:
         a = self._condition.wait_for(pred, timeout)
     if a:
-      def ul():
-        with self._condition:
-          if a_r is not None:
-            a_r[0] = None
-            while self._queue_r and self._queue_r[0][0] is None:
-              del self._queue_r[0]
-          if a_w is not None:
-            a_w[0] = None
-            while self._queue_w and self._queue_w[0][0] is None:
-              del self._queue_w[0]
-          self._condition.notify_all()
-      return (None if timeout is None else timeout + t - time.monotonic()), ul
+      return (None if timeout is None else timeout + t - time.monotonic()), (a_r, a_w)
     else:
       raise InterruptedError() if self.closed else TimeoutError()
+
+  def unlock(self, ul):
+    a_r, a_w = ul
+    with self._condition:
+      if a_r is not None:
+        a_r[0] = None
+        while self._queue_r and self._queue_r[0][0] is None:
+          self._queue_r.popleft()
+      if a_w is not None:
+        a_w[0] = None
+        while self._queue_w and self._queue_w[0][0] is None:
+          self._queue_w.popleft()
+      self._condition.notify_all()
 
   @staticmethod
   def _wait(ref):
@@ -563,14 +574,14 @@ class IDSocket(ISocket):
             break
       raise InterruptedError() if self.closed else TimeoutError()
     finally:
-      ul()
+      self.unlock(ul)
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout, 'w')
     try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
     finally:
-      ul()
+      self.unlock(ul)
 
   def accept(self, timeout=''):
     rt, ul = self.lock(timeout, 'a')
@@ -606,11 +617,11 @@ class IDSocket(ISocket):
             pass
       if a is not None:
         isock = self.gen.wrap(a[0])
-        isock.settimeout(self.timeout)        
+        isock.settimeout(self.timeout)
         return (isock, a[1])
       raise InterruptedError() if self.closed else TimeoutError()
     finally:
-      ul()
+      self.unlock(ul)
 
   def connect(self, *args, timeout='', **kwargs):
     rt, ul =  self.lock(timeout, 'c')
@@ -628,7 +639,7 @@ class IDSocket(ISocket):
         elif self.errors['c']:
           raise ConnectionRefusedError()
     finally:
-      ul()
+      self.unlock(ul)
 
   @classmethod
   def waitmult(cls, *args, **kwargs):
@@ -660,10 +671,10 @@ class IDSocketGenerator(ISocketGenerator):
 class NestedSSLContext(ssl.SSLContext):
 
   class SSLSocket(ssl.SSLSocket):
-  
+
     _esocket = socket.socket()
     _esocket.detach()
-  
+
     def __new__(cls, *args, **kwargs):
       if not hasattr(cls, 'sock'):
         raise TypeError('%s does not have a public constructor. Instances are returned by NestedSSLContext.wrap_socket().' % cls.__name__)
@@ -779,6 +790,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.inc = ssl.MemoryBIO()
       self.out = ssl.MemoryBIO()
       self.sslobj = context.wrap_bio(self.inc, self.out, server_side, server_hostname)
+      self.olock = threading.Lock()
 
     @property
     def sslsocket(self):
@@ -791,7 +803,7 @@ class NestedSSLContext(ssl.SSLContext):
       return self.sslobj._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context'):
+      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context', 'olock'):
         object.__setattr__(self, name, value)
       else:
         self.sslobj._sslobj.__setattr__(name, value)
@@ -865,14 +877,17 @@ class NestedSSLContext(ssl.SSLContext):
           except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
             z = False
             if self.out.pending:
-              z = True
-              set_rt()
-              if self.is_isocket:
-                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
-              else:
-                if timeout is not None:
-                  self.sslsocket.socket.settimeout(rt)
-                self.sslsocket.socket.sendall(self.out.read())
+              with self.olock:
+                b = self.out.read()
+                if b:
+                  z = True
+                  set_rt()
+                  if self.is_isocket:
+                    self.sslsocket.socket.sendall(b, timeout=rt)
+                  else:
+                    if timeout is not None:
+                      self.sslsocket.socket.settimeout(rt)
+                    self.sslsocket.socket.sendall(b)
             elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
               raise
             if err.errno == ssl.SSL_ERROR_WANT_READ:
@@ -896,13 +911,16 @@ class NestedSSLContext(ssl.SSLContext):
                   raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
           else:
             if self.out.pending:
-              set_rt()
-              if self.is_isocket:
-                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
-              else:
-                if timeout is not None:
-                  self.sslsocket.socket.settimeout(rt)
-                self.sslsocket.socket.sendall(self.out.read())
+              with self.olock:
+                b = self.out.read()
+                if b:
+                  set_rt()
+                  if self.is_isocket:
+                    self.sslsocket.socket.sendall(b, timeout=rt)
+                  else:
+                    if timeout is not None:
+                      self.sslsocket.socket.settimeout(rt)
+                    self.sslsocket.socket.sendall(b)
             return res
       finally:
         if not self.is_isocket and timeout is not None:
@@ -914,11 +932,14 @@ class NestedSSLContext(ssl.SSLContext):
     def read(self, length=16384, buffer=None):
       return self.interface(self.sslobj._sslobj.read, length) if buffer is None else self.interface(self.sslobj._sslobj.read, length, buffer)
 
+    # def write(self, bytes):
+      # w = self.sslobj._sslobj.write(bytes)
+      # if self.out.pending:
+        # self.sslsocket.socket.sendall(self.out.read())
+      # return w
+
     def write(self, bytes):
-      w = self.sslobj._sslobj.write(bytes)
-      if self.out.pending:
-        self.sslsocket.socket.sendall(self.out.read())
-      return w
+      return self.interface(self.sslobj._sslobj.write, bytes)
 
     def shutdown(self):
       self.interface(self.sslobj._sslobj.shutdown)
@@ -1807,7 +1828,7 @@ class HTTPBaseRequest:
             pass
           pconnection[0] = None
           pconnection[2].pop()
-          continue        
+          continue
         while code == '100':
           rem_time = cls._rem_time(None, end_time)
           if max_length < 0:
@@ -1886,7 +1907,7 @@ class HTTPBaseRequest:
           if hauth is not None:
             headers['Authorization'] = hauth
           else:
-            del headers['Authorization']        
+            del headers['Authorization']
     if max_length < 0:
       def callback():
         resp.body.__kwdefaults__['callback'] = None
@@ -2434,7 +2455,7 @@ class WebSocketHandler:
     except:
       return False
     return True
-      
+
   def send_pong(self):
     with self.ping_lock:
       ping_data = self.ping_data
@@ -2619,7 +2640,7 @@ class WebSocketHandler:
         rt = self.inactive_maxtime / 2
       self.ping_lock.release()
       self.send_event.wait(rt)
-   
+
   def handle(self):
     self.connected_callback()
     self.last_reception_time = time.monotonic()
@@ -2861,7 +2882,7 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
         self.path = path
         if self.channel.datastore is None:
           self.queued_events = {}
-        else:      
+        else:
           self.outgoing_seq = []
           self.outgoing = True
         self.channel.handlers[self] = threading.current_thread()
@@ -2894,6 +2915,14 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
 class WebSocketIDServer(TCPIServer):
 
   def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=100, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
+    if nssl_context is True:
+      cid = base64.b32encode(os.urandom(10)).decode('utf-8')
+      nssl_context = NestedSSLContext(ssl.PROTOCOL_TLS_SERVER)
+      with RSASelfSigned('TCPIServer' + cid, 1) as cert:
+        cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
+        nssl_context.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
+    if nssl_context is not None:
+      nssl_context.options |=  ssl.OP_NO_RENEGOTIATION
     super().__init__(server_address, WebSocketRequestHandler, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, IDSocketGenerator, nssl_context)
     self.address = server_address
     self.channels = {}
@@ -3024,8 +3053,10 @@ class WebSocketIDClient(WebSocketHandler):
     ws_acc = base64.b64encode(sha1).decode('utf-8')
     if proxy is not None:
       proxy['tunnel'] = True
-    rep = HTTPRequestConstructor(self.idsocketgen, proxy)(channel_address, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
-    if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close:  
+    HTTPRequest = HTTPRequestConstructor(self.idsocketgen, proxy)
+    HTTPRequest.SSLContext.options |=  ssl.OP_NO_RENEGOTIATION
+    rep = HTTPRequest(channel_address, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
+    if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close:
       return None
     self.pconnection[0].settimeout(None)
     return self
