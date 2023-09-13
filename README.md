@@ -3,7 +3,7 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 
 1. Interruptible thread-safe sockets: ISocketGenerator
 2. Interruptible thread-safe duplex sockets: IDSocketGenerator
-3. Nested SSL/TLS context: NestedSSLContext
+3. Nested SSL/TLS context (sequential or duplex): NestedSSLContext
 4. HTTP message parser: HTTPMessage and HTTPStreamMessage
 5. HTTP request compatible with proxy: HTTPRequestConstructor
 6. Self-signed RSA certificate: RSASelfSigned
