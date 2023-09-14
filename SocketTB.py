@@ -779,7 +779,7 @@ class NestedSSLContext(ssl.SSLContext):
   class _SSLSocket():
 
     def __init__(self, context, ssl_sock, server_side, server_hostname):
-      self.context = context
+      self.read_ahead = context.ssl_read_ahead
       self._sslsocket = weakref.ref(ssl_sock)
       self.inc = ssl.MemoryBIO()
       self.out = ssl.MemoryBIO()
@@ -796,7 +796,7 @@ class NestedSSLContext(ssl.SSLContext):
       return self.sslobj._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context'):
+      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'read_ahead'):
         object.__setattr__(self, name, value)
       else:
         self.sslobj._sslobj.__setattr__(name, value)
@@ -867,19 +867,19 @@ class NestedSSLContext(ssl.SSLContext):
               raise
             if err.errno == ssl.SSL_ERROR_WANT_READ:
               try:
-                if self.context.ssl_read_ahead:
+                if self.read_ahead:
                   if end_time is not None:
                     rt = max(end_time - time.monotonic(), z)
                     if rt < 0:
                       raise TimeoutError(10060, 'timed out')
                   if self.is_isocket:
-                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead, timeout=rt)):
+                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead, timeout=rt)):
                       raise ConnectionResetError
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       self.sslsocket.socket.settimeout(rt)
-                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead)):
+                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
                   sto = self._read_record(end_time, sto)
@@ -931,7 +931,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.wlock = threading.Lock()
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'context', 'wlock', 'rcondition', 'rcounter'):
+      if name in ('_sslsocket', 'is_isocket', 'inc', 'out', 'sslobj', 'read_ahead', 'wlock', 'rcondition', 'rcounter'):
         object.__setattr__(self, name, value)
       else:
         self.sslobj._sslobj.__setattr__(name, value)
@@ -986,19 +986,19 @@ class NestedSSLContext(ssl.SSLContext):
                   self.rcondition.wait(rt)
                   continue
               try:
-                if self.context.ssl_read_ahead:
+                if self.read_ahead:
                   if end_time is not None:
                     rt = max(end_time - time.monotonic(), z)
                     if rt < 0:
                       raise TimeoutError(10060, 'timed out')
                   if self.is_isocket:
-                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead, timeout=rt)):
+                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead, timeout=rt)):
                       raise ConnectionResetError
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       self.sslsocket.socket.settimeout(rt)
-                    if not self.inc.write(self.sslsocket.socket.recv(self.context.ssl_read_ahead)):
+                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
                   sto = self._read_record(end_time, sto)
