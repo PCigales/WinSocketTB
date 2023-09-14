@@ -547,12 +547,11 @@ class IDSocket(ISocket):
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout, m)
-    if rt is not None:
-      end_time = rt + time.monotonic()
     try:
       self.events[m].clear()
       if self.closed:
         raise InterruptedError()
+      end_time = None
       while True:
         try:
           r = func(self, *args, **kwargs)
@@ -561,7 +560,10 @@ class IDSocket(ISocket):
           return r
         except BlockingIOError:
           if rt is not None:
-            rt = end_time - time.monotonic()
+            if end_time is None:
+              end_time = rt + time.monotonic()
+            else:
+              rt = end_time - time.monotonic()
           if self.events[m].wait(rt):
             if len(args) <= f or not (args[f] & socket.MSG_PEEK):
               self.events[m].clear()
@@ -582,12 +584,11 @@ class IDSocket(ISocket):
 
   def accept(self, timeout=''):
     rt, ul = self.lock(timeout, 'a')
-    if rt is not None:
-      end_time = rt + time.monotonic()
     try:
       self.events['a'].clear()
       if self.closed:
         raise InterruptedError()
+      end_time = None
       a = None
       while True:
         self.gettimeout = lambda : None
@@ -596,7 +597,10 @@ class IDSocket(ISocket):
           break
         except BlockingIOError:
           if rt is not None:
-            rt = end_time - time.monotonic()
+            if end_time is None:
+              end_time = rt + time.monotonic()
+            else:
+              rt = end_time - time.monotonic()
           del self.gettimeout
           if self.events['a'].wait(rt):
             self.events['a'].clear()
