@@ -547,11 +547,12 @@ class IDSocket(ISocket):
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout, m)
+    if rt is not None:
+      end_time = rt + time.monotonic()
     try:
       self.events[m].clear()
       if self.closed:
         raise InterruptedError()
-      t = None
       while True:
         try:
           r = func(self, *args, **kwargs)
@@ -560,11 +561,7 @@ class IDSocket(ISocket):
           return r
         except BlockingIOError:
           if rt is not None:
-            if t is None:
-              rt0 = rt
-              t = time.monotonic()
-            else:
-              rt = rt0 + t - time.monotonic()
+            rt = end_time - time.monotonic()
           if self.events[m].wait(rt):
             if len(args) <= f or not (args[f] & socket.MSG_PEEK):
               self.events[m].clear()
@@ -585,11 +582,12 @@ class IDSocket(ISocket):
 
   def accept(self, timeout=''):
     rt, ul = self.lock(timeout, 'a')
+    if rt is not None:
+      end_time = rt + time.monotonic()
     try:
       self.events['a'].clear()
       if self.closed:
         raise InterruptedError()
-      t = None
       a = None
       while True:
         self.gettimeout = lambda : None
@@ -598,11 +596,7 @@ class IDSocket(ISocket):
           break
         except BlockingIOError:
           if rt is not None:
-            if t is None:
-              rt0 = rt
-              t = time.monotonic()
-            else:
-              rt = rt0 + t - time.monotonic()
+            rt = end_time - time.monotonic()
           del self.gettimeout
           if self.events['a'].wait(rt):
             self.events['a'].clear()
@@ -947,8 +941,7 @@ class NestedSSLContext(ssl.SSLContext):
       end_time = None if timeout is None else timeout + time.monotonic()
       try:
         while True:
-          with self.rcondition:
-            rc = 2 * (self.rcounter // 2)
+          rc = self.rcounter & -2
           try:
             res = action(*args, **kwargs)
           except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
