@@ -806,6 +806,7 @@ class NestedSSLContext(ssl.SSLContext):
         self.sslobj._sslobj.__setattr__(name, value)
 
     def _read_record(self, end_time, sto):
+      sock = self._sslsocket().socket
       bl = b''
       rt = None
       while len(bl) < 5:
@@ -814,12 +815,12 @@ class NestedSSLContext(ssl.SSLContext):
           if rt < 0:
             raise TimeoutError(10060, 'timed out')
         if self.is_isocket:
-          b_ = self.sslsocket.socket.recv(5 - len(bl), timeout=rt)
+          b_ = sock.recv(5 - len(bl), timeout=rt)
         else:
           if rt is not None and sto - rt > 0.005:
             sto = rt
-            self.sslsocket.socket.settimeout(rt)
-          b_ = self.sslsocket.socket.recv(5 - len(bl))
+            sock.settimeout(rt)
+          b_ = sock.recv(5 - len(bl))
         if not b_:
           raise ConnectionResetError
         bl += b_
@@ -833,12 +834,12 @@ class NestedSSLContext(ssl.SSLContext):
             raise TimeoutError(10060, 'timed out')
           z = -1
         if self.is_isocket:
-          b_ = self.sslsocket.socket.recv(l, timeout=rt)
+          b_ = sock.recv(l, timeout=rt)
         else:
           if rt is not None and sto - rt > 0.005:
             sto = rt
-            self.sslsocket.socket.settimeout(rt)
-          b_ = self.sslsocket.socket.recv(l)
+            sock.settimeout(rt)
+          b_ = sock.recv(l)
         if not b_:
           raise ConnectionResetError
         l -= len(b_)
@@ -846,7 +847,9 @@ class NestedSSLContext(ssl.SSLContext):
       return sto
 
     def interface(self, action, *args, **kwargs):
-      rt = sto = timeout = self.sslsocket.gettimeout()
+      sock = self._sslsocket()
+      rt = sto = timeout = sock.gettimeout()
+      sock = sock.socket
       end_time = None if timeout is None else timeout + time.monotonic()
       try:
         while True:
@@ -861,12 +864,12 @@ class NestedSSLContext(ssl.SSLContext):
                   raise TimeoutError(10060, 'timed out')
                 z = 0
               if self.is_isocket:
-                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
+                sock.sendall(self.out.read(), timeout=rt)
               else:
                 if rt is not None and sto - rt > 0.005:
                   sto = rt
-                  self.sslsocket.socket.settimeout(rt)
-                self.sslsocket.socket.sendall(self.out.read())
+                  sock.settimeout(rt)
+                sock.sendall(self.out.read())
             elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
               raise
             if err.errno == ssl.SSL_ERROR_WANT_READ:
@@ -877,13 +880,13 @@ class NestedSSLContext(ssl.SSLContext):
                     if rt < 0:
                       raise TimeoutError(10060, 'timed out')
                   if self.is_isocket:
-                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead, timeout=rt)):
+                    if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
                       raise ConnectionResetError
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
-                      self.sslsocket.socket.settimeout(rt)
-                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead)):
+                      sock.settimeout(rt)
+                    if not self.inc.write(sock.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
                   sto = self._read_record(end_time, sto)
@@ -899,16 +902,16 @@ class NestedSSLContext(ssl.SSLContext):
                 if rt < 0:
                   raise TimeoutError(10060, 'timed out')
               if self.is_isocket:
-                self.sslsocket.socket.sendall(self.out.read(), timeout=rt)
+                sock.sendall(self.out.read(), timeout=rt)
               else:
                 if rt is not None and sto - rt > 0.005:
                   sto = rt
-                  self.sslsocket.socket.settimeout(rt)
-                self.sslsocket.socket.sendall(self.out.read())
+                  sock.settimeout(rt)
+                sock.sendall(self.out.read())
             return res
       finally:
         if not self.is_isocket and timeout is not None:
-          self.sslsocket.socket.settimeout(timeout)
+          sock.settimeout(timeout)
 
     def do_handshake(self):
       return self.interface(self.sslobj._sslobj.do_handshake)
@@ -941,7 +944,9 @@ class NestedSSLContext(ssl.SSLContext):
         self.sslobj._sslobj.__setattr__(name, value)
 
     def interface(self, action, *args, **kwargs):
-      rt = sto = timeout = self.sslsocket.gettimeout()
+      sock = self._sslsocket()
+      rt = sto = timeout = sock.gettimeout()
+      sock = sock.socket
       end_time = None if timeout is None else timeout + time.monotonic()
       try:
         while True:
@@ -966,12 +971,12 @@ class NestedSSLContext(ssl.SSLContext):
                 b = self.out.read()
                 if b:
                   if self.is_isocket:
-                    self.sslsocket.socket.sendall(b, timeout=rt)
+                    sock.sendall(b, timeout=rt)
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
-                      self.sslsocket.socket.settimeout(rt)
-                    self.sslsocket.socket.sendall(b)
+                      sock.settimeout(rt)
+                    sock.sendall(b)
               finally:
                 self.wlock.release()
             elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
@@ -996,13 +1001,13 @@ class NestedSSLContext(ssl.SSLContext):
                     if rt < 0:
                       raise TimeoutError(10060, 'timed out')
                   if self.is_isocket:
-                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead, timeout=rt)):
+                    if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
                       raise ConnectionResetError
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
-                      self.sslsocket.socket.settimeout(rt)
-                    if not self.inc.write(self.sslsocket.socket.recv(self.read_ahead)):
+                      sock.settimeout(rt)
+                    if not self.inc.write(sock.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
                   sto = self._read_record(end_time, sto)
@@ -1031,18 +1036,18 @@ class NestedSSLContext(ssl.SSLContext):
                 b = self.out.read()
                 if b:
                   if self.is_isocket:
-                    self.sslsocket.socket.sendall(b, timeout=rt)
+                    sock.sendall(b, timeout=rt)
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
-                      self.sslsocket.socket.settimeout(rt)
-                    self.sslsocket.socket.sendall(b)
+                      sock.settimeout(rt)
+                    sock.sendall(b)
               finally:
                 self.wlock.release()
             return res
       finally:
         if not self.is_isocket and timeout is not None:
-          self.sslsocket.socket.settimeout(timeout)
+          sock.settimeout(timeout)
 
   def __init__(self, *args, duplex=False, **kwargs):
     self.DefaultSSLContext = ssl.SSLContext(*args, **kwargs)
@@ -1063,7 +1068,7 @@ class NestedSSLContext(ssl.SSLContext):
 
   def __setattr__(self, name, value):
     object.__setattr__(self, name, value)
-    if name != 'DefaultSSLContext':
+    if name not in ('DefaultSSLContext', 'ssl_read_ahead', 'duplex'):
       self.DefaultSSLContext.__setattr__(name, value)
 
   def wrap_socket(self, sock, *args, **kwargs):
@@ -2387,7 +2392,6 @@ class MultiUDPIServer(UDPIServer):
       for a, addr in enumerate(self.server_address):
         self.isockets[a].setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(addr[0])))
 
-
   def _get_request(self, isocket):
     return isocket.recvfrom(self.max_packet_size)
 
@@ -2872,7 +2876,7 @@ class WebSocketDataStore:
     else:
       return None
 
-  def wait_for_incoming_event(self, timeout=None, clear=None):
+  def wait_for_incoming_event(self, timeout=None, clear=False):
     if clear:
       self.incoming_event.clear()
     incoming_event = self.incoming_event.wait(timeout)
@@ -2880,7 +2884,7 @@ class WebSocketDataStore:
       self.incoming_event.clear()
       return True
     else:
-      return None
+      return False
 
 
 class WebSocketServerChannel:
@@ -3058,7 +3062,7 @@ class WebSocketIDServer(TCPIServer):
         for idsock in channel.idsockets:
           idsock.shutclose()
       if block:
-        self._wait_threads(channel.handlers.values)
+        self._wait_threads(channel.handlers.values())
     if not block:
       with self.lock:
         self.threads.remove(threading.current_thread())
@@ -3153,12 +3157,12 @@ class WebSocketIDClient(WebSocketHandler):
     HTTPRequest = HTTPRequestConstructor(self.idsocketgen, proxy)
     HTTPRequest.SSLContext.duplex = True
     rep = HTTPRequest(channel_address, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
-    if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close:
+    if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close or not self.pconnection[0]:
       return None
     self.pconnection[0].settimeout(None)
     return self
 
-  def __init__(self, channel_address, datastore=None, own_address=None, connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None):
+  def __init__(self, channel_address, datastore=None, own_address='', connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None, idsocket_generator=None):
     self.idsocket = self.pconnection[0]
     WebSocketHandler.__init__(self, self.idsocket, 'client')
     self.datastore = datastore
@@ -3258,7 +3262,14 @@ class WebSocketIDClient(WebSocketHandler):
     self.thread = None
 
   def close(self, data=b'', timeout=None, block_on_close=False):
-    WebSocketHandler.close(self, data if self.datastore is None else (self.datastore.before_shutdown or b''))
+    if self.datastore is not None:
+      data = self.datastore.before_shutdown
+    if isinstance(data, str):
+      data = data.encode('utf-8')
+    else:
+      data = data or b''
+    data = data[:0x7d]
+    WebSocketHandler.close(self, data)
     if block_on_close:
       self._close(timeout, True)
     else:
