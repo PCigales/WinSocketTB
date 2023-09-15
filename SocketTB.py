@@ -851,15 +851,15 @@ class NestedSSLContext(ssl.SSLContext):
       rt = sto = timeout = sock.gettimeout()
       sock = sock.socket
       end_time = None if timeout is None else timeout + time.monotonic()
+      z = 0
       try:
         while True:
           try:
             res = action(*args, **kwargs)
           except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
-            z = -1
             if self.out.pending:
               if end_time is not None:
-                rt = end_time - time.monotonic()
+                rt = max(end_time - time.monotonic(), z)
                 if rt < 0:
                   raise TimeoutError(10060, 'timed out')
                 z = 0
@@ -895,10 +895,11 @@ class NestedSSLContext(ssl.SSLContext):
                   raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
                 else:
                   raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
+            z = -1
           else:
             if self.out.pending:
               if end_time is not None:
-                rt = end_time - time.monotonic()
+                rt = max(end_time - time.monotonic(), z)
                 if rt < 0:
                   raise TimeoutError(10060, 'timed out')
               if self.is_isocket:
@@ -948,23 +949,23 @@ class NestedSSLContext(ssl.SSLContext):
       rt = sto = timeout = sock.gettimeout()
       sock = sock.socket
       end_time = None if timeout is None else timeout + time.monotonic()
+      z = 0
       try:
         while True:
           rc = self.rcounter & -2
           try:
             res = action(*args, **kwargs)
           except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
-            z = -1
             if self.out.pending:
               if end_time is not None:
-                rt = end_time - time.monotonic()
+                rt = max(end_time - time.monotonic(), z)
                 if rt < 0 or not self.wlock.acquire(timeout=rt):
                   raise TimeoutError(10060, 'timed out')
               else:
                 self.wlock.acquire()
               try:
                 if end_time is not None:
-                  rt = end_time - time.monotonic()
+                  rt = max(end_time - time.monotonic(), z)
                   if rt < 0:
                     raise TimeoutError(10060, 'timed out')
                   z = 0
@@ -1020,10 +1021,11 @@ class NestedSSLContext(ssl.SSLContext):
                 with self.rcondition:
                   self.rcounter += 1
                   self.rcondition.notify_all()
+            z = -1          
           else:
             if self.out.pending:
               if end_time is not None:
-                rt = end_time - time.monotonic()
+                rt = max(end_time - time.monotonic(), z)
                 if rt < 0 or not self.wlock.acquire(timeout=rt):
                   raise TimeoutError(10060, 'timed out')
               else:
