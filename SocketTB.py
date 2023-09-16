@@ -1100,106 +1100,83 @@ class NestedSSLContext(ssl.SSLContext):
       rt = sto = timeout
       end_time = None if timeout is None else timeout + time.monotonic()
       z = 0
-      try:
-        while True:
-          rc = self.rcounter & -2
-          try:
-            res = action(*args, **kwargs)
-          except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
-            if self.out.pending:
+      while True:
+        rc = self.rcounter & -2
+        try:
+          res = action(*args, **kwargs)
+        except (ssl.SSLWantReadError, ssl.SSLWantWriteError) as err:
+          if self.out.pending:
+            if end_time is not None:
+              rt = max(end_time - time.monotonic(), z)
+              if rt < 0 or not self.wlock.acquire(timeout=rt):
+                raise TimeoutError(10060, 'timed out')
+            else:
+              self.wlock.acquire()
+            try:
               if end_time is not None:
                 rt = max(end_time - time.monotonic(), z)
-                if rt < 0 or not self.wlock.acquire(timeout=rt):
+                if rt < 0:
                   raise TimeoutError(10060, 'timed out')
+                z = 0
+              b = self.out.read()
+              if b:
+                sock.sendall(b, timeout=rt)
+            finally:
+              self.wlock.release()
+          elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
+            raise
+          if err.errno == ssl.SSL_ERROR_WANT_READ:
+            with self.rcondition:
+              if self.rcounter == rc:
+                self.rcounter += 1
+              elif self.rcounter > rc + 1:
+                continue
               else:
-                self.wlock.acquire()
-              try:
                 if end_time is not None:
                   rt = max(end_time - time.monotonic(), z)
                   if rt < 0:
                     raise TimeoutError(10060, 'timed out')
-                  z = 0
-                b = self.out.read()
-                if b:
-                  if self.hto:
-                    sock.sendall(b, timeout=rt)
-                  else:
-                    if rt is not None and sto - rt > 0.005:
-                      sto = rt
-                      sock.settimeout(rt)
-                    sock.sendall(b)
-              finally:
-                self.wlock.release()
-            elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
-              raise
-            if err.errno == ssl.SSL_ERROR_WANT_READ:
-              with self.rcondition:
-                if self.rcounter == rc:
-                  self.rcounter += 1
-                elif self.rcounter > rc + 1:
-                  continue
-                else:
-                  if end_time is not None:
-                    rt = max(end_time - time.monotonic(), z)
-                    if rt < 0:
-                      raise TimeoutError(10060, 'timed out')
-                  self.rcondition.wait(rt)
-                  continue
-              try:
-                if self.read_ahead:
-                  if end_time is not None:
-                    rt = max(end_time - time.monotonic(), z)
-                    if rt < 0:
-                      raise TimeoutError(10060, 'timed out')
-                  if self.hto:
-                    if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
-                      raise ConnectionResetError
-                  else:
-                    if rt is not None and sto - rt > 0.005:
-                      sto = rt
-                      sock.settimeout(rt)
-                    if not self.inc.write(sock.recv(self.read_ahead)):
-                      raise ConnectionResetError
-                else:
-                  sto = self._read_record(end_time, sto)
-              except ConnectionResetError:
-                if action == self.sslobj._sslobj.do_handshake:
-                  raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
-                else:
-                  raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
-              finally:
-                with self.rcondition:
-                  self.rcounter += 1
-                  self.rcondition.notify_all()
-            z = -1
-          else:
-            if self.out.pending:
-              if end_time is not None:
-                rt = max(end_time - time.monotonic(), z)
-                if rt < 0 or not self.wlock.acquire(timeout=rt):
-                  raise TimeoutError(10060, 'timed out')
-              else:
-                self.wlock.acquire()
-              try:
+                self.rcondition.wait(rt)
+                continue
+            try:
+              if self.read_ahead:
                 if end_time is not None:
-                  rt = end_time - time.monotonic()
+                  rt = max(end_time - time.monotonic(), z)
                   if rt < 0:
                     raise TimeoutError(10060, 'timed out')
-                b = self.out.read()
-                if b:
-                  if self.hto:
-                    sock.sendall(b, timeout=rt)
-                  else:
-                    if rt is not None and sto - rt > 0.005:
-                      sto = rt
-                      sock.settimeout(rt)
-                    sock.sendall(b)
-              finally:
-                self.wlock.release()
-            return res
-      finally:
-        if not self.hto and timeout is not None:
-          sock.settimeout(timeout)
+                if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
+                  raise ConnectionResetError
+              else:
+                sto = self._read_record(end_time, sto)
+            except ConnectionResetError:
+              if action == self.sslobj._sslobj.do_handshake:
+                raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+              else:
+                raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
+            finally:
+              with self.rcondition:
+                self.rcounter += 1
+                self.rcondition.notify_all()
+          z = -1
+        else:
+          if self.out.pending:
+            if end_time is not None:
+              rt = max(end_time - time.monotonic(), z)
+              if rt < 0 or not self.wlock.acquire(timeout=rt):
+                raise TimeoutError(10060, 'timed out')
+            else:
+              self.wlock.acquire()
+            try:
+              if end_time is not None:
+                rt = end_time - time.monotonic()
+                if rt < 0:
+                  raise TimeoutError(10060, 'timed out')
+              b = self.out.read()
+              if b:
+                sock.sendall(b, timeout=rt)
+            finally:
+              self.wlock.release()
+          return res
 
   def __init__(self, *args, **kwargs):
     self.DefaultSSLContext = ssl.SSLContext(*args, **kwargs)
