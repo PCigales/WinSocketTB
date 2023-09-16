@@ -785,7 +785,13 @@ class NestedSSLContext(ssl.SSLContext):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to recv() on %s" % self.__class__)
-        return self.read((buflen, timeout))
+        try:
+          return self._sslobj.read(buflen, timeout=timeout)
+        except ssl.SSLEOFError:
+          if self.suppress_ragged_eofs:
+            return b''
+          else:
+            raise
       else:
         return self._wrap_no_sslobj(self.socket.recv, buflen, flags, timeout=timeout)
 
@@ -795,7 +801,13 @@ class NestedSSLContext(ssl.SSLContext):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to recv_into() on %s" % self.__class__)
-        return self.read((nbytes, timeout), buffer)
+        try:
+          return self._sslobj.read(nbytes, buffer, timeout=timeout)
+        except ssl.SSLEOFError:
+          if self.suppress_ragged_eofs:
+            return b''
+          else:
+            raise
       else:
         return self._wrap_no_sslobj(self.socket.recv_into, buffer, nbytes, flags, timeout=timeout)
 
@@ -815,7 +827,7 @@ class NestedSSLContext(ssl.SSLContext):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to send() on %s" % self.__class__)
-        return self._sslobj.write((data, timeout))
+        return self._sslobj.write(data, timeout=timeout)
       else:
         return self._wrap_no_sslobj(self.socket.send, data, flags, timeout=timeout)
 
@@ -1051,18 +1063,10 @@ class NestedSSLContext(ssl.SSLContext):
     def do_handshake(self, timeout=''):
       return self.interface(self.sslobj._sslobj.do_handshake, timeout=timeout)
 
-    def read(self, length_timeout=(16384, ''), buffer=None):
-      try:
-        length, timeout = length_timeout
-      except:
-        length, timeout = length_timeout, ''
+    def read(self, length=16384, buffer=None, timeout=''):
       return self.interface(self.sslobj._sslobj.read, length, timeout=timeout) if buffer is None else self.interface(self.sslobj._sslobj.read, length, buffer, timeout=timeout)
 
-    def write(self, bytes_timeout=(b'', '')):
-      try:
-        bytes, timeout = bytes_timeout
-      except:
-        bytes, timeout = bytes_timeout, ''
+    def write(self, bytes, timeout=''):
       return self.interface(self.sslobj._sslobj.write, bytes, timeout=timeout)
 
     def shutdown(self, timeout=''):
