@@ -116,12 +116,17 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
   def lock(self, timeout=''):
     if timeout == '':
       timeout = self.sock_timeout
-    t = time.monotonic()
-    a = self._lock.acquire(timeout=(timeout if timeout is not None else -1))
-    if a:
-      return (None if timeout is None else max(0, timeout + t - time.monotonic())), None
+    if timeout is None:
+      if self._lock.acquire():
+        return None, None
+      else:
+        raise InterruptedError() if self.closed else TimeoutError()
     else:
-      raise InterruptedError() if self.closed else TimeoutError()
+      t = time.monotonic()
+      if self._lock.acquire(timeout=timeout):
+        return max(0, timeout + t - time.monotonic()), None
+      else:
+        raise InterruptedError() if self.closed else TimeoutError()
 
   def unlock(self, ul):
     self._lock.release()
@@ -216,10 +221,10 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     self.sock_timeout = value
 
   def getblocking(self):
-    return self.sock_timeout != 0
+    return self.sock_timeout != 0.0
 
   def setblocking(self, flag):
-    self.sock_timeout = None if flag else 0
+    self.sock_timeout = None if flag else 0.0
 
   @property
   def timeout(self):
@@ -256,16 +261,19 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.unlock(ul)
 
   def _sendall(self, bytes, *args, timeout=None, **kwargs):
-    t = time.monotonic()
-    rt = timeout
     with memoryview(bytes).cast('B') as m:
       l = len(m)
       s = 0
-      while s < l:
-        if timeout is not None and rt < 0:
-          raise TimeoutError()
-        s += self.send(m[s:], *args, timeout=rt, **kwargs)
-        if timeout is not None:
+      if timeout is None:
+        while s < l:
+          s += self.send(m[s:], *args, timeout=None, **kwargs)
+      else:
+        t = time.monotonic()
+        rt = timeout
+        while s < l:
+          if rt < 0:
+            raise TimeoutError()
+          s += self.send(m[s:], *args, timeout=rt, **kwargs)
           rt = timeout + t - time.monotonic()
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
@@ -481,7 +489,6 @@ class IDSocket(ISocket):
       pred = lambda : self._queue_r[0][0] == th and self._queue_w[0][0] == th
     if timeout == '':
       timeout = self.sock_timeout
-    t = time.monotonic()
     a_r = a_w = None
     with self._condition:
       if mode != 'w':
@@ -491,12 +498,21 @@ class IDSocket(ISocket):
         a_w = [th]
         self._queue_w.append(a_w)
       a = pred()
-      if not a:
-        a = self._condition.wait_for(pred, timeout)
-    if a:
-      return (None if timeout is None else timeout + t - time.monotonic()), (a_r, a_w)
-    else:
-      raise InterruptedError() if self.closed else TimeoutError()
+      if timeout is None:
+        if not a:
+          a = self._condition.wait_for(pred)
+        if a:
+          return None, (a_r, a_w)
+        else:
+          raise InterruptedError() if self.closed else TimeoutError()
+      else:
+        t = time.monotonic()
+        if not a:
+          a = self._condition.wait_for(pred, timeout)
+        if a:
+          return timeout + t - time.monotonic(), (a_r, a_w)
+        else:
+          raise InterruptedError() if self.closed else TimeoutError()
 
   def unlock(self, ul):
     a_r, a_w = ul
@@ -759,6 +775,8 @@ class NestedSSLContext(ssl.SSLContext):
         pass
 
     def do_handshake(self, block=False, timeout=''):
+      if timeout == '':
+        timeout = self.gettimeout()
       to = None if (timeout == 0.0 and block) else timeout
       self._sslobj.do_handshake(timeout=to)
 
@@ -805,7 +823,7 @@ class NestedSSLContext(ssl.SSLContext):
           return self._sslobj.read(nbytes, buffer, timeout=timeout)
         except ssl.SSLEOFError:
           if self.suppress_ragged_eofs:
-            return b''
+            return 0
           else:
             raise
       else:
@@ -843,25 +861,26 @@ class NestedSSLContext(ssl.SSLContext):
           raise ValueError("non-zero flags not allowed in calls to sendall() on %s" % self.__class__)
         if timeout == '':
           timeout = self.gettimeout()
-        t = time.monotonic()
-        rt = timeout
         with memoryview(data).cast("B") as m:
           l = len(m)
           s = 0
-          while s < l:
-            if timeout is not None and rt < 0:
-              raise TimeoutError()
-            s += self.send(m[s:], timeout=rt)
-            if timeout is not None:
+          if timeout is None:
+            while s < l:
+              s += self.send(m[s:], timeout=None)
+          else:
+            t = time.monotonic()
+            rt = timeout
+            while s < l:
+              if rt < 0:
+                raise TimeoutError()
+              s += self.send(m[s:], timeout=rt)
               rt = timeout + t - time.monotonic()
       else:
         return self._wrap_no_sslobj(self.socket.sendall, data, flags, timeout=timeout)
 
     def accept(self, timeout=''):
-      if timeout == '':
-        timeout = self.gettimeout()
       t = time.monotonic()
-      rt = timeout
+      rt = self.gettimeout() if timeout == '' else timeout 
       if self.sock_hto:
         sock, addr = self.socket.accept(timeout=rt)
       else:
@@ -873,15 +892,14 @@ class NestedSSLContext(ssl.SSLContext):
         finally:
           if timeout != '':
             self.socket.settimeout(to)
-      if timeout is not None:
-        rt = timeout + t - time.monotonic()
+      timeout = rt
+      if rt is not None:
+        rt += t - time.monotonic()
         if rt < 0:
           raise TimeoutError()
-      try:
-        sock.settimeout(rt)
-        sock = self.context.wrap_socket(sock, do_handshake_on_connect=self.do_handshake_on_connect, suppress_ragged_eofs=self.suppress_ragged_eofs, server_side=True)
-      finally:
-        sock.settimeout(timeout)
+      sock.settimeout(rt)
+      sock = self.context.wrap_socket(sock, do_handshake_on_connect=self.do_handshake_on_connect, suppress_ragged_eofs=self.suppress_ragged_eofs, server_side=True)
+      sock.settimeout(timeout)
       return sock, addr
 
     def connect(self, addr, timeout=''):
@@ -890,10 +908,8 @@ class NestedSSLContext(ssl.SSLContext):
       if self._connected or self._sslobj is not None:
         raise ValueError('attempt to connect already-connected SSLSocket!')
       self._sslobj = self.context._wrap_socket(self, False, self.server_hostname, owner=self, session=self._session)
-      if timeout == '':
-        timeout = self.gettimeout()
       t = time.monotonic()
-      rt = timeout
+      rt = self.gettimeout() if timeout == '' else timeout 
       try:
         if self.sock_hto:
           self.socket.connect(addr, timeout=rt)
@@ -908,8 +924,8 @@ class NestedSSLContext(ssl.SSLContext):
               self.socket.settimeout(to)
         self._connected = True
         if self.do_handshake_on_connect:
-          if timeout is not None:
-            rt = timeout + t - time.monotonic()
+          if rt is not None:
+            rt += t - time.monotonic()
             if rt < 0:
               raise TimeoutError()
           self.do_handshake(timeout=rt)
@@ -947,15 +963,16 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         self.sslobj._sslobj.__setattr__(name, value)
 
-    def _read_record(self, end_time, sto):
+    def _read_record(self, end_time, z, sto):
       sock = self._sslsocket().socket
       bl = b''
       rt = None
       while len(bl) < 5:
         if end_time is not None:
-          rt = end_time - time.monotonic()
+          rt = max(end_time - time.monotonic(), z)
           if rt < 0:
             raise TimeoutError(10060, 'timed out')
+          z = -1
         if self.hto:
           b_ = sock.recv(5 - len(bl), timeout=rt)
         else:
@@ -1035,7 +1052,7 @@ class NestedSSLContext(ssl.SSLContext):
                     if not self.inc.write(sock.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
-                  sto = self._read_record(end_time, sto)
+                  sto = self._read_record(end_time, z, sto)
               except ConnectionResetError:
                 if action == self.sslobj._sslobj.do_handshake:
                   raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
@@ -1147,7 +1164,7 @@ class NestedSSLContext(ssl.SSLContext):
                 if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
                   raise ConnectionResetError
               else:
-                sto = self._read_record(end_time, sto)
+                sto = self._read_record(end_time, z, sto)
             except ConnectionResetError:
               if action == self.sslobj._sslobj.do_handshake:
                 raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
