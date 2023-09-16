@@ -745,6 +745,10 @@ class NestedSSLContext(ssl.SSLContext):
 
     def shutclose(self):
       try:
+        self.recv(1, timeout=0)
+      except:
+        pass
+      try:
         if hasattr(self.socket, 'shutclose'):
           self.socket.shutclose()
         else:
@@ -880,7 +884,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     def accept(self, timeout=''):
       t = time.monotonic()
-      rt = self.gettimeout() if timeout == '' else timeout 
+      rt = self.gettimeout() if timeout == '' else timeout
       if self.sock_hto:
         sock, addr = self.socket.accept(timeout=rt)
       else:
@@ -909,7 +913,7 @@ class NestedSSLContext(ssl.SSLContext):
         raise ValueError('attempt to connect already-connected SSLSocket!')
       self._sslobj = self.context._wrap_socket(self, False, self.server_hostname, owner=self, session=self._session)
       t = time.monotonic()
-      rt = self.gettimeout() if timeout == '' else timeout 
+      rt = self.gettimeout() if timeout == '' else timeout
       try:
         if self.sock_hto:
           self.socket.connect(addr, timeout=rt)
