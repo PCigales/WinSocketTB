@@ -1,4 +1,4 @@
-# SocketTB v1.1.1 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.2.0 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -1385,6 +1385,19 @@ class HTTPMessage:
       return None
 
   @staticmethod
+  def _read_hto(message, max_data, end_time):
+    try:
+      if end_time is None:
+        return message.recv(min(max_data, 1048576), timeout=None)
+      else:
+        rem_time = end_time - time.monotonic()
+        if rem_time <= 0:
+          return None
+        return message.recv(min(max_data, 1048576), timeout=rem_time)
+    except:
+      return None
+
+  @staticmethod
   def _write(message, msg, end_time):
     try:
       if end_time is not None:
@@ -1394,6 +1407,20 @@ class HTTPMessage:
         if abs(message.gettimeout() - rem_time) > 0.005:
           message.settimeout(rem_time)
       message.sendall(msg)
+      return len(msg)
+    except:
+      return None
+
+  @staticmethod
+  def _write_hto(message, msg, end_time):
+    try:
+      if end_time is None:
+        message.sendall(msg, timeout=None)
+      else:
+        rem_time = end_time - time.monotonic()
+        if rem_time <= 0:
+          return None
+        message.sendall(msg, timeout=rem_time)
       return len(msg)
     except:
       return None
@@ -1420,6 +1447,12 @@ class HTTPMessage:
         message.settimeout(max_time)
       except:
         return http_message
+      if isinstance(message, (ISocket, NestedSSLContext.SSLSocket)):
+        read = cls._read_hto
+        write = cls._write_hto
+      else:
+        read = cls._read
+        write = cls._write
     while True:
       msg = msg.lstrip(b'\r\n')
       if msg and msg[0] < 0x20:
@@ -1435,7 +1468,7 @@ class HTTPMessage:
       if not iss or rem_length <= 0:
         return http_message
       try:
-        bloc = cls._read(message, rem_length, end_time)
+        bloc = read(message, rem_length, end_time)
         if not bloc:
           return http_message
       except:
@@ -1474,7 +1507,7 @@ class HTTPMessage:
         if not ce in ('deflate', 'gzip'):
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           return http_message.clear()
@@ -1483,13 +1516,13 @@ class HTTPMessage:
     if http_message.in_header('Expect', '100-continue') and iss:
       if body_pos + body_len - len(msg) <= rem_length:
         try:
-          if cls._write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
+          if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
             return http_message.clear()
         except:
           return http_message.clear()
       else:
         try:
-          cls._write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+          write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
         except:
           pass
         if exceeded is not None:
@@ -1504,7 +1537,7 @@ class HTTPMessage:
           rem_length -= bbuf.write(msg[body_pos:])
           while rem_length > 0:
             try:
-              bw = bbuf.write(cls._read(message, rem_length, end_time))
+              bw = bbuf.write(read(message, rem_length, end_time))
               if not bw:
                 break
               rem_length -= bw
@@ -1526,7 +1559,7 @@ class HTTPMessage:
         body_len -= bbuf.write(msg[body_pos:])
         while body_len:
           try:
-            bw = bbuf.write(cls._read(message, body_len, end_time))
+            bw = bbuf.write(read(message, body_len, end_time))
             if not bw:
               return http_message.clear()
             body_len -= bw
@@ -1558,7 +1591,7 @@ class HTTPMessage:
               exceeded[0] = True
             return http_message.clear()
           try:
-            bloc = cls._read(message, min(rem_length, rem_slength), end_time)
+            bloc = read(message, min(rem_length, rem_slength), end_time)
             if not bloc:
               return http_message.clear()
           except:
@@ -1582,7 +1615,7 @@ class HTTPMessage:
           chunk_len -= bbuf.write(buff[chunk_pos:])
           while chunk_len:
             try:
-              bw = bbuf.write(cls._read(message, chunk_len, end_time))
+              bw = bbuf.write(read(message, chunk_len, end_time))
               if not bw:
                 return http_message.clear()
               chunk_len -= bw
@@ -1603,7 +1636,7 @@ class HTTPMessage:
             exceeded[0] = True
           return http_message.clear()
         try:
-          bloc = cls._read(message, rem_length, end_time)
+          bloc = read(message, rem_length, end_time)
           if not bloc:
             return http_message.clear()
         except:
@@ -1630,7 +1663,7 @@ class HTTPMessage:
       except:
         if http_message.method is not None and iss:
           try:
-            cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+            write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
           except:
             pass
         return http_message.clear()
@@ -1656,6 +1689,12 @@ class HTTPStreamMessage(HTTPMessage):
         message.settimeout(max_time)
       except:
         return http_message
+      if isinstance(message, (ISocket, NestedSSLContext.SSLSocket)):
+        read = cls._read_hto
+        write = cls._write_hto
+      else:
+        read = cls._read
+        write = cls._write
     while True:
       msg = msg.lstrip(b'\r\n')
       body_pos = msg.find(b'\r\n\r\n')
@@ -1669,7 +1708,7 @@ class HTTPStreamMessage(HTTPMessage):
       if not iss or rem_length <= 0:
         return http_message
       try:
-        bloc = cls._read(message, rem_length, end_time)
+        bloc = read(message, rem_length, end_time)
         if not bloc:
           return http_message
       except:
@@ -1705,7 +1744,7 @@ class HTTPStreamMessage(HTTPMessage):
         if not ce in ('deflate', 'gzip'):
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           return http_message.clear()
@@ -1715,7 +1754,7 @@ class HTTPStreamMessage(HTTPMessage):
     rce = range(len(hce))
     if http_message.in_header('Expect', '100-continue') and iss:
       try:
-        if cls._write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
+        if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
           return http_message.clear()
       except:
         return http_message.clear()
@@ -1747,7 +1786,7 @@ class HTTPStreamMessage(HTTPMessage):
         except:
           if http_message.method is not None and iss:
             try:
-              cls._write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           raise
@@ -1775,7 +1814,7 @@ class HTTPStreamMessage(HTTPMessage):
                 if max_time is not False:
                   message.settimeout(max_time)
                   max_time = False
-                bw = bbuf_write(cls._read(message, 1048576, end_time))
+                bw = bbuf_write(read(message, 1048576, end_time))
                 if not bw:
                   break
               except:
@@ -1799,7 +1838,7 @@ class HTTPStreamMessage(HTTPMessage):
               if max_time is not False:
                 message.settimeout(max_time)
                 max_time = False
-              bw = bbuf_write(cls._read(message, min(body_len, 1048576), end_time))
+              bw = bbuf_write(read(message, min(body_len, 1048576), end_time))
               if not bw:
                 raise
               body_len -= bw
@@ -1836,7 +1875,7 @@ class HTTPStreamMessage(HTTPMessage):
               if max_time is not False:
                 message.settimeout(max_time)
                 max_time = False
-              bloc = cls._read(message, min(rem_slength, 1048576), end_time)
+              bloc = read(message, min(rem_slength, 1048576), end_time)
               if not bloc:
                 raise
             except:
@@ -1870,7 +1909,7 @@ class HTTPStreamMessage(HTTPMessage):
                 if max_time is not False:
                   message.settimeout(max_time)
                   max_time = False
-                bw = bbuf_write(cls._read(message, min(chunk_len, 1048576), end_time))
+                bw = bbuf_write(read(message, min(chunk_len, 1048576), end_time))
                 if not bw:
                   raise
                 chunk_len -= bw
@@ -1898,7 +1937,7 @@ class HTTPStreamMessage(HTTPMessage):
             if max_time is not False:
               message.settimeout(max_time)
               max_time = False
-            bloc = cls._read(message, 1048576, end_time)
+            bloc = read(message, 1048576, end_time)
             if not bloc:
               raise
           except:
