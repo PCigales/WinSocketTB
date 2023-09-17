@@ -1446,7 +1446,7 @@ class HTTPMessage:
     rem_length = max_hlength
     try:
       if not iss:
-        msg = message[0]
+        msg = message[0] if isinstance(message, (tuple, list)) else message
       else:
         msg = b''
         try:
@@ -1694,9 +1694,10 @@ class HTTPStreamMessage(HTTPMessage):
     end_time = None if max_time is None else time.monotonic() + max_time
     iss = isinstance(message, socket.socket)
     rem_length = max_hlength
+    bbuf = None
     try:
       if not iss:
-        msg = message[0]
+        msg = message[0] if isinstance(message, (tuple, list)) else message
       else:
         msg = b''
         try:
@@ -1775,7 +1776,7 @@ class HTTPStreamMessage(HTTPMessage):
           return http_message.clear()
       bbuf = ssl.MemoryBIO()
     finally:
-      if iss:
+      if iss and bbuf is None:
         try:
           message.settimeout(mto)
         except:
@@ -1815,12 +1816,12 @@ class HTTPStreamMessage(HTTPMessage):
           return len(data)
       nonlocal body_len
       nonlocal end_time
-      if body_len != 0:
-        length, max_time = yield None
-        end_time = None if max_time is None else time.monotonic() + max_time
-      else:
-        return b''
       try:
+        if body_len != 0:
+          length, max_time = yield None
+          end_time = None if max_time is None else time.monotonic() + max_time
+        else:
+          return b''
         if not chunked:
           if body_len < 0:
             try:
