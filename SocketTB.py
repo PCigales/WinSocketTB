@@ -100,7 +100,7 @@ class ISocketMeta(type):
 class ISocket(socket.socket, metaclass=ISocketMeta):
 
   MODES = {'r': LONG(33), 'a': LONG(8), 'w': LONG(34), 'c': LONG(16)}
-  has_timeout = True
+  HAS_TIMEOUT = True
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     socket.socket.__init__(self, family, type, proto, fileno)
@@ -470,7 +470,7 @@ class IDSocket(ISocket):
   MODES = {'u': LONG(59)}
   MODES_M = {'r': 33, 'a': 8, 'w': 34, 'c': 16}
   MODES_I = {'r': 0, 'a': 3, 'w': 1, 'c': 4}
-  is_duplex = True
+  IS_DUPLEX = True
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     super().__init__(gen, family, type, proto, fileno, timeout)
@@ -690,7 +690,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     _esocket = socket.socket()
     _esocket.detach()
-    has_timeout = True
+    HAS_TIMEOUT = True
 
     def __new__(cls, *args, **kwargs):
       if not hasattr(cls, 'sock'):
@@ -699,7 +699,7 @@ class NestedSSLContext(ssl.SSLContext):
       self = super(cls_, cls_).__new__(cls_, *args, **kwargs)
       self.socket = cls.sock
       cls.sock = None
-      self.sock_hto = getattr(self.socket.__class__, 'has_timeout', False)
+      self.sock_hto = getattr(self.socket.__class__, 'HAS_TIMEOUT', False)
       return self
 
     @classmethod
@@ -1228,7 +1228,7 @@ class NestedSSLContext(ssl.SSLContext):
 
   @classmethod
   def _is_duplex(cls, ssl_sock):
-    return getattr(ssl_sock.socket.__class__, 'is_duplex', False) or (isinstance(ssl_sock.socket, cls.SSLSocket) and cls._is_duplex(ssl_sock.socket))
+    return getattr(ssl_sock.socket.__class__, 'IS_DUPLEX', False) or (isinstance(ssl_sock.socket, cls.SSLSocket) and cls._is_duplex(ssl_sock.socket))
 
   def _wrap_socket(self, ssl_sock, server_side, server_hostname, *args, **kwargs):
     return (self._SSLDSocket if self._is_duplex(ssl_sock) else self._SSLSocket)(self, ssl_sock, server_side, server_hostname)
@@ -1454,7 +1454,7 @@ class HTTPMessage:
           message.settimeout(max_time)
         except:
           return http_message
-        if getattr(message.__class__, 'has_timeout', False):
+        if getattr(message.__class__, 'HAS_TIMEOUT', False):
           read = cls._read_hto
           write = cls._write_hto
         else:
@@ -1704,7 +1704,7 @@ class HTTPStreamMessage(HTTPMessage):
           message.settimeout(max_time)
         except:
           return http_message
-        if getattr(message.__class__, 'has_timeout', False):
+        if getattr(message.__class__, 'HAS_TIMEOUT', False):
           read = cls._read_hto
           write = cls._write_hto
         else:
