@@ -100,6 +100,7 @@ class ISocketMeta(type):
 class ISocket(socket.socket, metaclass=ISocketMeta):
 
   MODES = {'r': LONG(33), 'a': LONG(8), 'w': LONG(34), 'c': LONG(16)}
+  has_timeout = True
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     socket.socket.__init__(self, family, type, proto, fileno)
@@ -152,7 +153,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       ws2.WSACloseEvent(self.event)
       self.gen.isockets[self] = False
 
-  def unwrap(self, timeout=''):
+  def unwrap(self, *, timeout=''):
     rt, ul = self.lock(timeout)
     try:
       self.mode = None
@@ -185,9 +186,9 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     self.unlock(ul)
     self.sock_fileno = -1
 
-  def close(self):
+  def close(self, *args, **kwargs):
     self._close()
-    socket.socket.close(self)
+    socket.socket.close(self, *args, **kwargs)
 
   def shutclose(self):
     self._close()
@@ -200,9 +201,9 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     except:
       pass
 
-  def detach(self):
+  def detach(self, *args, **kwargs):
     self._close()
-    return socket.socket.detach(self)
+    return socket.socket.detach(self, *args, **kwargs)
 
   def __enter__(self):
     return self
@@ -283,7 +284,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
-  def accept(self, timeout=''):
+  def accept(self, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout)
     try:
       if self.closed:
@@ -293,12 +294,12 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.gettimeout = lambda : None
       a = None
       try:
-        a = socket.socket.accept(self)
+        a = socket.socket.accept(self, *args, **kwargs)
       except BlockingIOError:
         del self.gettimeout
         if self.wait(rt):
           self.gettimeout = lambda : None
-          a = socket.socket.accept(self)
+          a = socket.socket.accept(self, *args, **kwargs)
       finally:
         try:
           del self.gettimeout
@@ -469,6 +470,7 @@ class IDSocket(ISocket):
   MODES = {'u': LONG(59)}
   MODES_M = {'r': 33, 'a': 8, 'w': 34, 'c': 16}
   MODES_I = {'r': 0, 'a': 3, 'w': 1, 'c': 4}
+  is_duplex = True
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     super().__init__(gen, family, type, proto, fileno, timeout)
@@ -598,7 +600,7 @@ class IDSocket(ISocket):
     finally:
       self.unlock(ul)
 
-  def accept(self, timeout=''):
+  def accept(self, timeout='', *args, **kwargs):
     rt, ul = self.lock(timeout, 'a')
     try:
       self.events['a'].clear()
@@ -609,7 +611,7 @@ class IDSocket(ISocket):
       while True:
         self.gettimeout = lambda : None
         try:
-          a = socket.socket.accept(self)
+          a = socket.socket.accept(self, *args, **kwargs)
           break
         except BlockingIOError:
           if rt is not None:
@@ -688,6 +690,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     _esocket = socket.socket()
     _esocket.detach()
+    has_timeout = True
 
     def __new__(cls, *args, **kwargs):
       if not hasattr(cls, 'sock'):
@@ -696,7 +699,7 @@ class NestedSSLContext(ssl.SSLContext):
       self = super(cls_, cls_).__new__(cls_, *args, **kwargs)
       self.socket = cls.sock
       cls.sock = None
-      self.sock_hto = isinstance(self.socket, (ISocket, NestedSSLContext.SSLSocket))
+      self.sock_hto = getattr(self.socket.__class__, 'has_timeout', False)
       return self
 
     @classmethod
@@ -718,7 +721,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.socket = self._esocket
       return super().detach()
 
-    def unwrap(self, timeout=''):
+    def unwrap(self, *, timeout=''):
       try:
         if self._sslobj:
           sock = self._sslobj.shutdown(timeout=timeout)
@@ -778,13 +781,13 @@ class NestedSSLContext(ssl.SSLContext):
       except:
         pass
 
-    def do_handshake(self, block=False, timeout=''):
+    def do_handshake(self, block=False, *, timeout=''):
       if timeout == '':
         timeout = self.gettimeout()
       to = None if (timeout == 0.0 and block) else timeout
       self._sslobj.do_handshake(timeout=to)
 
-    def verify_client_post_handshake(self, timeout=''):
+    def verify_client_post_handshake(self, *, timeout=''):
       if self._sslobj:
         return self._sslobj.verify_client_post_handshake(timeout=timeout)
       else:
@@ -803,7 +806,7 @@ class NestedSSLContext(ssl.SSLContext):
           if timeout != '':
             self.socket.settimeout(to)
 
-    def recv(self, buflen=16384, flags=0, timeout=''):
+    def recv(self, buflen=16384, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to recv() on %s" % self.__class__)
@@ -817,7 +820,7 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         return self._wrap_no_sslobj(self.socket.recv, buflen, flags, timeout=timeout)
 
-    def recv_into(self, buffer, nbytes=None, flags=0, timeout=''):
+    def recv_into(self, buffer, nbytes=None, flags=0, *, timeout=''):
       if nbytes is None:
         nbytes = len(buffer) if buffer else 16384
       if self._sslobj is not None:
@@ -833,19 +836,19 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         return self._wrap_no_sslobj(self.socket.recv_into, buffer, nbytes, flags, timeout=timeout)
 
-    def recvfrom(self, buflen=1024, flags=0, timeout=''):
+    def recvfrom(self, buflen=1024, flags=0, *, timeout=''):
       if self._sslobj is not None:
         raise ValueError("recvfrom not allowed on instances of %s" % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.recvfrom, buflen, flags, timeout=timeout)
 
-    def recvfrom_into(self, buffer, nbytes=None, flags=0, timeout=''):
+    def recvfrom_into(self, buffer, nbytes=None, flags=0, *, timeout=''):
       if self._sslobj is not None:
         raise ValueError("recvfrom_into not allowed on instances of %s" % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.recvfrom_into, buffer, nbytes, flags, timeout=timeout)
 
-    def send(self, data, flags=0, timeout=''):
+    def send(self, data, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to send() on %s" % self.__class__)
@@ -853,13 +856,13 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         return self._wrap_no_sslobj(self.socket.send, data, flags, timeout=timeout)
 
-    def sendto(self, data, flags_or_addr, addr=None, timeout=''):
+    def sendto(self, data, flags_or_addr, addr=None, *, timeout=''):
       if self._sslobj is not None:
         raise ValueError("sendto not allowed on instances of %s" % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.sendto, data, flags_or_addr, timeout=timeout) if addr is None else self._wrap_no_sslobj(self.socket.sendto, data, flags_or_addr, addr, timeout=timeout)
 
-    def sendall(self, data, flags=0, timeout=''):
+    def sendall(self, data, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
           raise ValueError("non-zero flags not allowed in calls to sendall() on %s" % self.__class__)
@@ -882,7 +885,7 @@ class NestedSSLContext(ssl.SSLContext):
       else:
         return self._wrap_no_sslobj(self.socket.sendall, data, flags, timeout=timeout)
 
-    def accept(self, timeout=''):
+    def accept(self, *, timeout=''):
       t = time.monotonic()
       rt = self.gettimeout() if timeout == '' else timeout
       if self.sock_hto:
@@ -906,7 +909,7 @@ class NestedSSLContext(ssl.SSLContext):
       sock.settimeout(timeout)
       return sock, addr
 
-    def connect(self, addr, timeout=''):
+    def connect(self, addr, *, timeout=''):
       if self.server_side:
         raise ValueError('can\'t connect in server-side mode')
       if self._connected or self._sslobj is not None:
@@ -1210,7 +1213,7 @@ class NestedSSLContext(ssl.SSLContext):
     return new_callable
 
   def __getattribute__(self, name):
-    if not name in NestedSSLContext.__dict__ and type(object.__getattribute__(self, name)) in (types.BuiltinMethodType, types.MethodType):
+    if name not in object.__getattribute__(self, '_nestedSSLContext_set') and type(object.__getattribute__(self, name)) in (types.BuiltinMethodType, types.MethodType):
       return self.wrap_callable(name)
     else:
       return object.__getattribute__(self, name)
@@ -1225,13 +1228,15 @@ class NestedSSLContext(ssl.SSLContext):
 
   @classmethod
   def _is_duplex(cls, ssl_sock):
-    return isinstance(ssl_sock.socket, IDSocket) or (isinstance(ssl_sock.socket, cls.SSLSocket) and cls._is_duplex(ssl_sock.socket))
+    return getattr(ssl_sock.socket.__class__, 'is_duplex', False) or (isinstance(ssl_sock.socket, cls.SSLSocket) and cls._is_duplex(ssl_sock.socket))
 
   def _wrap_socket(self, ssl_sock, server_side, server_hostname, *args, **kwargs):
-    return (NestedSSLContext._SSLDSocket if self._is_duplex(ssl_sock) else NestedSSLContext._SSLSocket)(self, ssl_sock, server_side, server_hostname)
+    return (self._SSLDSocket if self._is_duplex(ssl_sock) else self._SSLSocket)(self, ssl_sock, server_side, server_hostname)
 
   def wrap_bio(self, *args, **kwargs):
     return self.DefaultSSLContext.wrap_bio(*args, **kwargs)
+
+  _nestedSSLContext_set = {*locals(), '_encode_hostname', 'cert_store_stats', 'get_ca_certs', 'get_ciphers', 'session_stats'}
 
 
 class HTTPExplodedMessage:
@@ -1439,290 +1444,55 @@ class HTTPMessage:
     iss = isinstance(message, socket.socket)
     max_hlength = min(max_length, max_hlength)
     rem_length = max_hlength
-    if not iss:
-      msg = message[0]
-    else:
-      msg = b''
-      try:
-        message.settimeout(max_time)
-      except:
-        return http_message
-      if isinstance(message, (ISocket, NestedSSLContext.SSLSocket)):
-        read = cls._read_hto
-        write = cls._write_hto
+    try:
+      if not iss:
+        msg = message[0]
       else:
-        read = cls._read
-        write = cls._write
-    while True:
-      msg = msg.lstrip(b'\r\n')
-      if msg and msg[0] < 0x20:
-        return http_message
-      body_pos = msg.find(b'\r\n\r\n')
-      if body_pos >= 0:
-        body_pos += 4
-        break
-      body_pos = msg.find(b'\n\n')
-      if body_pos >= 0:
-        body_pos += 2
-        break
-      if not iss or rem_length <= 0:
-        return http_message
-      try:
-        bloc = read(message, rem_length, end_time)
-        if not bloc:
+        msg = b''
+        try:
+          mto = message.gettimeout()
+          message.settimeout(max_time)
+        except:
           return http_message
-      except:
-        return http_message
-      rem_length -= len(bloc)
-      msg = msg + bloc
-    if not cls._read_headers(msg[:body_pos].decode('ISO-8859-1'), http_message):
-      return http_message.clear()
-    if not iss:
-      http_message.expect_close = True
-    if http_message.code in ('100', '101', '204', '304'):
-      http_message.body = b''
-      return http_message
-    if not body:
-      http_message.body = msg[body_pos:]
-      return http_message
-    rem_length += max_length - max_hlength
-    chunked = http_message.in_header('Transfer-Encoding', 'chunked')
-    if chunked:
-      body_len = -1
-    else:
-      body_len = http_message.header('Content-Length')
-      if body_len is None:
-        if not iss or (http_message.code in ('200', '206') and http_message.expect_close):
-          body_len = -1
+        if getattr(message.__class__, 'has_timeout', False):
+          read = cls._read_hto
+          write = cls._write_hto
         else:
-          body_len = 0
-      else:
-        try:
-          body_len = max(0, int(body_len))
-        except:
-          return http_message.clear()
-    if decompress and body_len != 0:
-      hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
-      for ce in hce:
-        if not ce in ('deflate', 'gzip'):
-          if http_message.method is not None and iss:
-            try:
-              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
-            except:
-              pass
-          return http_message.clear()
-    else:
-      hce = []
-    if http_message.in_header('Expect', '100-continue') and iss:
-      if body_pos + body_len - len(msg) <= rem_length:
-        try:
-          if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
-            return http_message.clear()
-        except:
-          return http_message.clear()
-      else:
-        try:
-          write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
-        except:
-          pass
-        if exceeded is not None:
-          exceeded[0] = True
-        return http_message.clear()
-    if not chunked:
-      if body_len < 0:
-        if not iss:
-          http_message.body = msg[body_pos:]
-        else:
-          bbuf = BytesIO()
-          rem_length -= bbuf.write(msg[body_pos:])
-          while rem_length > 0:
-            try:
-              bw = bbuf.write(read(message, rem_length, end_time))
-              if not bw:
-                break
-              rem_length -= bw
-            except:
-              return http_message.clear()
-          if rem_length <= 0:
-            if exceeded is not None:
-              exceeded[0] = True
-            return http_message.clear()
-          http_message.body = bbuf.getvalue()
-      elif len(msg) < body_pos + body_len:
-        if not iss:
-          return http_message.clear()
-        if body_pos + body_len - len(msg) > rem_length:
-          if exceeded is not None:
-            exceeded[0] = True
-          return http_message.clear()
-        bbuf = BytesIO()
-        body_len -= bbuf.write(msg[body_pos:])
-        while body_len:
-          try:
-            bw = bbuf.write(read(message, body_len, end_time))
-            if not bw:
-              return http_message.clear()
-            body_len -= bw
-          except:
-            return http_message.clear()
-        http_message.body = bbuf.getvalue()
-      else:
-        http_message.body = msg[body_pos:body_pos+body_len]
-    else:
-      bbuf = BytesIO()
-      buff = msg[body_pos:]
+          read = cls._read
+          write = cls._write
       while True:
-        chunk_pos = -1
-        rem_slength = max_hlength - len(buff)
-        while chunk_pos < 0:
-          buff = buff.lstrip(b'\r\n')
-          chunk_pos = buff.find(b'\r\n')
-          if chunk_pos >= 0:
-            chunk_pos += 2
-            break
-          chunk_pos = buff.find(b'\n')
-          if chunk_pos >= 0:
-            chunk_pos += 1
-            break
-          if not iss or rem_slength <= 0:
-            return http_message.clear()
-          if rem_length <= 0:
-            if exceeded is not None:
-              exceeded[0] = True
-            return http_message.clear()
-          try:
-            bloc = read(message, min(rem_length, rem_slength), end_time)
-            if not bloc:
-              return http_message.clear()
-          except:
-            return http_message.clear()
-          rem_length -= len(bloc)
-          rem_slength -= len(bloc)
-          buff = buff + bloc
-        try:
-          chunk_len = int(buff[:chunk_pos].split(b';', 1)[0].rstrip(b'\r\n'), 16)
-          if not chunk_len:
-            break
-        except:
-          return http_message.clear()
-        if chunk_pos + chunk_len - len(buff) > rem_length:
-          if exceeded is not None:
-            exceeded[0] = True
-          return http_message.clear()
-        if len(buff) < chunk_pos + chunk_len:
-          if not iss:
-            return http_message.clear()
-          chunk_len -= bbuf.write(buff[chunk_pos:])
-          while chunk_len:
-            try:
-              bw = bbuf.write(read(message, chunk_len, end_time))
-              if not bw:
-                return http_message.clear()
-              chunk_len -= bw
-            except:
-              return http_message.clear()
-            rem_length -= bw
-          buff = b''
-        else:
-          bbuf.write(buff[chunk_pos:chunk_pos+chunk_len])
-          buff = buff[chunk_pos+chunk_len:]
-      http_message.body = bbuf.getvalue()
-      rem_length = min(rem_length, max_hlength - body_pos - len(buff) + chunk_pos)
-      while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
-        if not iss:
-          return http_message.clear()
-        if rem_length <= 0:
-          if exceeded is not None:
-            exceeded[0] = True
-          return http_message.clear()
+        msg = msg.lstrip(b'\r\n')
+        if msg and msg[0] < 0x20:
+          return http_message
+        body_pos = msg.find(b'\r\n\r\n')
+        if body_pos >= 0:
+          body_pos += 4
+          break
+        body_pos = msg.find(b'\n\n')
+        if body_pos >= 0:
+          body_pos += 2
+          break
+        if not iss or rem_length <= 0:
+          return http_message
         try:
           bloc = read(message, rem_length, end_time)
           if not bloc:
-            return http_message.clear()
+            return http_message
         except:
-          return http_message.clear()
-        rem_length -= len(bloc)
-        buff = buff + bloc
-      if len(buff) - chunk_pos > 2:
-        cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
-    if http_message.body:
-      try:
-        if hce:
-          for ce in hce[::-1]:
-            if ce == 'deflate':
-              try:
-                http_message.body = zlib.decompress(http_message.body)
-              except:
-                http_message.body = zlib.decompress(http_message.body, wbits=-15)
-            elif ce == 'gzip':
-              http_message.body = gzip.decompress(http_message.body)
-            else:
-              raise
-        if decode:
-          http_message.body = http_message.body.decode(decode)
-      except:
-        if http_message.method is not None and iss:
-          try:
-            write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
-          except:
-            pass
-        return http_message.clear()
-    return http_message
-
-
-class HTTPStreamMessage(HTTPMessage):
-
-  def __new__(cls, message=None, decompress=True, max_hlength=1048576, max_time=None):
-    http_message = HTTPExplodedMessage()
-    if message is None:
-      return http_message
-    if max_time is False:
-      max_time = None
-    end_time = None if max_time is None else time.monotonic() + max_time
-    iss = isinstance(message, socket.socket)
-    rem_length = max_hlength
-    if not iss:
-      msg = message[0]
-    else:
-      msg = b''
-      try:
-        message.settimeout(max_time)
-      except:
-        return http_message
-      if isinstance(message, (ISocket, NestedSSLContext.SSLSocket)):
-        read = cls._read_hto
-        write = cls._write_hto
-      else:
-        read = cls._read
-        write = cls._write
-    while True:
-      msg = msg.lstrip(b'\r\n')
-      body_pos = msg.find(b'\r\n\r\n')
-      if body_pos >= 0:
-        body_pos += 4
-        break
-      body_pos = msg.find(b'\n\n')
-      if body_pos >= 0:
-        body_pos += 2
-        break
-      if not iss or rem_length <= 0:
-        return http_message
-      try:
-        bloc = read(message, rem_length, end_time)
-        if not bloc:
           return http_message
-      except:
+        rem_length -= len(bloc)
+        msg = msg + bloc
+      if not cls._read_headers(msg[:body_pos].decode('ISO-8859-1'), http_message):
+        return http_message.clear()
+      if not iss:
+        http_message.expect_close = True
+      if http_message.code in ('100', '101', '204', '304'):
+        http_message.body = b''
         return http_message
-      rem_length -= len(bloc)
-      msg = msg + bloc
-    if not cls._read_headers(msg[:body_pos].decode('ISO-8859-1'), http_message):
-      return http_message.clear()
-    if not iss:
-      http_message.expect_close = True
-    if http_message.code in ('100', '101', '204', '304'):
-      chunked = False
-      body_len = 0
-    else:
+      if not body:
+        http_message.body = msg[body_pos:]
+        return http_message
+      rem_length += max_length - max_hlength
       chunked = http_message.in_header('Transfer-Encoding', 'chunked')
       if chunked:
         body_len = -1
@@ -1738,27 +1508,278 @@ class HTTPStreamMessage(HTTPMessage):
             body_len = max(0, int(body_len))
           except:
             return http_message.clear()
-    if decompress and body_len != 0:
-      hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
-      for ce in hce:
-        if not ce in ('deflate', 'gzip'):
+      if decompress and body_len != 0:
+        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
+        for ce in hce:
+          if not ce in ('deflate', 'gzip'):
+            if http_message.method is not None and iss:
+              try:
+                write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+              except:
+                pass
+            return http_message.clear()
+      else:
+        hce = []
+      if http_message.in_header('Expect', '100-continue') and iss:
+        if body_pos + body_len - len(msg) <= rem_length:
+          try:
+            if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
+              return http_message.clear()
+          except:
+            return http_message.clear()
+        else:
+          try:
+            write(message, ('HTTP/1.1 413 Payload too large\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+          except:
+            pass
+          if exceeded is not None:
+            exceeded[0] = True
+          return http_message.clear()
+      if not chunked:
+        if body_len < 0:
+          if not iss:
+            http_message.body = msg[body_pos:]
+          else:
+            bbuf = BytesIO()
+            rem_length -= bbuf.write(msg[body_pos:])
+            while rem_length > 0:
+              try:
+                bw = bbuf.write(read(message, rem_length, end_time))
+                if not bw:
+                  break
+                rem_length -= bw
+              except:
+                return http_message.clear()
+            if rem_length <= 0:
+              if exceeded is not None:
+                exceeded[0] = True
+              return http_message.clear()
+            http_message.body = bbuf.getvalue()
+        elif len(msg) < body_pos + body_len:
+          if not iss:
+            return http_message.clear()
+          if body_pos + body_len - len(msg) > rem_length:
+            if exceeded is not None:
+              exceeded[0] = True
+            return http_message.clear()
+          bbuf = BytesIO()
+          body_len -= bbuf.write(msg[body_pos:])
+          while body_len:
+            try:
+              bw = bbuf.write(read(message, body_len, end_time))
+              if not bw:
+                return http_message.clear()
+              body_len -= bw
+            except:
+              return http_message.clear()
+          http_message.body = bbuf.getvalue()
+        else:
+          http_message.body = msg[body_pos:body_pos+body_len]
+      else:
+        bbuf = BytesIO()
+        buff = msg[body_pos:]
+        while True:
+          chunk_pos = -1
+          rem_slength = max_hlength - len(buff)
+          while chunk_pos < 0:
+            buff = buff.lstrip(b'\r\n')
+            chunk_pos = buff.find(b'\r\n')
+            if chunk_pos >= 0:
+              chunk_pos += 2
+              break
+            chunk_pos = buff.find(b'\n')
+            if chunk_pos >= 0:
+              chunk_pos += 1
+              break
+            if not iss or rem_slength <= 0:
+              return http_message.clear()
+            if rem_length <= 0:
+              if exceeded is not None:
+                exceeded[0] = True
+              return http_message.clear()
+            try:
+              bloc = read(message, min(rem_length, rem_slength), end_time)
+              if not bloc:
+                return http_message.clear()
+            except:
+              return http_message.clear()
+            rem_length -= len(bloc)
+            rem_slength -= len(bloc)
+            buff = buff + bloc
+          try:
+            chunk_len = int(buff[:chunk_pos].split(b';', 1)[0].rstrip(b'\r\n'), 16)
+            if not chunk_len:
+              break
+          except:
+            return http_message.clear()
+          if chunk_pos + chunk_len - len(buff) > rem_length:
+            if exceeded is not None:
+              exceeded[0] = True
+            return http_message.clear()
+          if len(buff) < chunk_pos + chunk_len:
+            if not iss:
+              return http_message.clear()
+            chunk_len -= bbuf.write(buff[chunk_pos:])
+            while chunk_len:
+              try:
+                bw = bbuf.write(read(message, chunk_len, end_time))
+                if not bw:
+                  return http_message.clear()
+                chunk_len -= bw
+              except:
+                return http_message.clear()
+              rem_length -= bw
+            buff = b''
+          else:
+            bbuf.write(buff[chunk_pos:chunk_pos+chunk_len])
+            buff = buff[chunk_pos+chunk_len:]
+        http_message.body = bbuf.getvalue()
+        rem_length = min(rem_length, max_hlength - body_pos - len(buff) + chunk_pos)
+        while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
+          if not iss:
+            return http_message.clear()
+          if rem_length <= 0:
+            if exceeded is not None:
+              exceeded[0] = True
+            return http_message.clear()
+          try:
+            bloc = read(message, rem_length, end_time)
+            if not bloc:
+              return http_message.clear()
+          except:
+            return http_message.clear()
+          rem_length -= len(bloc)
+          buff = buff + bloc
+        if len(buff) - chunk_pos > 2:
+          cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
+      if http_message.body:
+        try:
+          if hce:
+            for ce in hce[::-1]:
+              if ce == 'deflate':
+                try:
+                  http_message.body = zlib.decompress(http_message.body)
+                except:
+                  http_message.body = zlib.decompress(http_message.body, wbits=-15)
+              elif ce == 'gzip':
+                http_message.body = gzip.decompress(http_message.body)
+              else:
+                raise
+          if decode:
+            http_message.body = http_message.body.decode(decode)
+        except:
           if http_message.method is not None and iss:
             try:
               write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
             except:
               pass
           return http_message.clear()
-      hce.reverse()
-    else:
-      hce = []
-    rce = range(len(hce))
-    if http_message.in_header('Expect', '100-continue') and iss:
-      try:
-        if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
-          return http_message.clear()
-      except:
+      return http_message
+    finally:
+      if iss:
+        try:
+          message.settimeout(mto)
+        except:
+          pass
+
+
+class HTTPStreamMessage(HTTPMessage):
+
+  def __new__(cls, message=None, decompress=True, max_hlength=1048576, max_time=None):
+    http_message = HTTPExplodedMessage()
+    if message is None:
+      return http_message
+    if max_time is False:
+      max_time = None
+    end_time = None if max_time is None else time.monotonic() + max_time
+    iss = isinstance(message, socket.socket)
+    rem_length = max_hlength
+    try:
+      if not iss:
+        msg = message[0]
+      else:
+        msg = b''
+        try:
+          mto = message.gettimeout()
+          message.settimeout(max_time)
+        except:
+          return http_message
+        if getattr(message.__class__, 'has_timeout', False):
+          read = cls._read_hto
+          write = cls._write_hto
+        else:
+          read = cls._read
+          write = cls._write
+      while True:
+        msg = msg.lstrip(b'\r\n')
+        body_pos = msg.find(b'\r\n\r\n')
+        if body_pos >= 0:
+          body_pos += 4
+          break
+        body_pos = msg.find(b'\n\n')
+        if body_pos >= 0:
+          body_pos += 2
+          break
+        if not iss or rem_length <= 0:
+          return http_message
+        try:
+          bloc = read(message, rem_length, end_time)
+          if not bloc:
+            return http_message
+        except:
+          return http_message
+        rem_length -= len(bloc)
+        msg = msg + bloc
+      if not cls._read_headers(msg[:body_pos].decode('ISO-8859-1'), http_message):
         return http_message.clear()
-    bbuf = ssl.MemoryBIO()
+      if not iss:
+        http_message.expect_close = True
+      if http_message.code in ('100', '101', '204', '304'):
+        chunked = False
+        body_len = 0
+      else:
+        chunked = http_message.in_header('Transfer-Encoding', 'chunked')
+        if chunked:
+          body_len = -1
+        else:
+          body_len = http_message.header('Content-Length')
+          if body_len is None:
+            if not iss or (http_message.code in ('200', '206') and http_message.expect_close):
+              body_len = -1
+            else:
+              body_len = 0
+          else:
+            try:
+              body_len = max(0, int(body_len))
+            except:
+              return http_message.clear()
+      if decompress and body_len != 0:
+        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
+        for ce in hce:
+          if not ce in ('deflate', 'gzip'):
+            if http_message.method is not None and iss:
+              try:
+                write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+              except:
+                pass
+            return http_message.clear()
+        hce.reverse()
+      else:
+        hce = []
+      rce = range(len(hce))
+      if http_message.in_header('Expect', '100-continue') and iss:
+        try:
+          if write(message, 'HTTP/1.1 100 Continue\r\n\r\n'.encode('ISO-8859-1'), end_time) is None:
+            return http_message.clear()
+        except:
+          return http_message.clear()
+      bbuf = ssl.MemoryBIO()
+    finally:
+      if iss:
+        try:
+          message.settimeout(mto)
+        except:
+          pass
     def _body():
       def error(value=None):
         e = GeneratorExit()
@@ -1799,75 +1820,138 @@ class HTTPStreamMessage(HTTPMessage):
         end_time = None if max_time is None else time.monotonic() + max_time
       else:
         return b''
-      if not chunked:
-        if body_len < 0:
-          try:
-            bbuf_write(msg[body_pos:])
-          except:
-            error()
-          if iss:
-            while True:
-              while bbuf.pending > length:
+      try:
+        if not chunked:
+          if body_len < 0:
+            try:
+              bbuf_write(msg[body_pos:])
+            except:
+              error()
+            if iss:
+              while True:
+                while bbuf.pending > length:
+                  length, max_time = yield bbuf.read(length)
+                  end_time = None if max_time is None else time.monotonic() + max_time
+                try:
+                  if max_time is not False:
+                    message.settimeout(max_time)
+                    max_time = False
+                  bw = bbuf_write(read(message, 1048576, end_time))
+                  if not bw:
+                    break
+                except:
+                  if bbuf.pending == length:
+                    length, max_time = yield bbuf.read(length)
+                  error(bbuf.read())
+          elif len(msg) < body_pos + body_len:
+            try:
+              body_len -= bbuf_write(msg[body_pos:])
+            except:
+              error()
+            if not iss:
+              while bbuf.pending >= length:
+                length, max_time = yield bbuf.read(length)
+              error(bbuf.read())
+            while body_len:
+              while bbuf.pending >= length:
                 length, max_time = yield bbuf.read(length)
                 end_time = None if max_time is None else time.monotonic() + max_time
               try:
                 if max_time is not False:
                   message.settimeout(max_time)
                   max_time = False
-                bw = bbuf_write(read(message, 1048576, end_time))
+                bw = bbuf_write(read(message, min(body_len, 1048576), end_time))
                 if not bw:
-                  break
+                  raise
+                body_len -= bw
+              except:
+                error(bbuf.read())
+          else:
+            try:
+              bbuf_write(msg[body_pos:body_pos+body_len])
+            except:
+              error()
+          while bbuf.pending > length:
+            length, max_time = yield bbuf.read(length)
+            end_time = None if max_time is None else time.monotonic() + max_time
+        else:
+          buff = msg[body_pos:]
+          while True:
+            chunk_pos = -1
+            rem_slength = max_hlength - len(buff)
+            while chunk_pos < 0:
+              buff = buff.lstrip(b'\r\n')
+              chunk_pos = buff.find(b'\r\n')
+              if chunk_pos >= 0:
+                chunk_pos += 2
+                break
+              chunk_pos = buff.find(b'\n')
+              if chunk_pos >= 0:
+                chunk_pos += 1
+                break
+              if not iss or rem_slength <= 0:
+                if bbuf.pending == length:
+                  length, max_time = yield bbuf.read(length)
+                error(bbuf.read())
+              try:
+                if max_time is not False:
+                  message.settimeout(max_time)
+                  max_time = False
+                bloc = read(message, min(rem_slength, 1048576), end_time)
+                if not bloc:
+                  raise
               except:
                 if bbuf.pending == length:
                   length, max_time = yield bbuf.read(length)
                 error(bbuf.read())
-        elif len(msg) < body_pos + body_len:
-          try:
-            body_len -= bbuf_write(msg[body_pos:])
-          except:
-            error()
-          if not iss:
-            while bbuf.pending >= length:
-              length, max_time = yield bbuf.read(length)
-            error(bbuf.read())
-          while body_len:
-            while bbuf.pending >= length:
+              rem_slength -= len(bloc)
+              buff = buff + bloc
+            try:
+              chunk_len = int(buff[:chunk_pos].split(b';', 1)[0].rstrip(b'\r\n'), 16)
+              if not chunk_len:
+                break
+            except:
+              if bbuf.pending == length:
+                length, max_time = yield bbuf.read(length)
+              error(bbuf.read())
+            if len(buff) < chunk_pos + chunk_len:
+              try:
+                chunk_len -= bbuf_write(buff[chunk_pos:])
+              except:
+                error(bbuf.read())
+              if not iss:
+                while bbuf.pending >= length:
+                  length, max_time = yield bbuf.read(length)
+                error(bbuf.read())
+              while chunk_len:
+                while bbuf.pending >= length:
+                  length, max_time = yield bbuf.read(length)
+                  end_time = None if max_time is None else time.monotonic() + max_time
+                try:
+                  if max_time is not False:
+                    message.settimeout(max_time)
+                    max_time = False
+                  bw = bbuf_write(read(message, min(chunk_len, 1048576), end_time))
+                  if not bw:
+                    raise
+                  chunk_len -= bw
+                except:
+                  error(bbuf.read())
+              buff = b''
+            else:
+              try:
+                bbuf_write(buff[chunk_pos:chunk_pos+chunk_len])
+              except:
+                error(bbuf.read())
+              buff = buff[chunk_pos+chunk_len:]
+            while bbuf.pending > length:
               length, max_time = yield bbuf.read(length)
               end_time = None if max_time is None else time.monotonic() + max_time
-            try:
-              if max_time is not False:
-                message.settimeout(max_time)
-                max_time = False
-              bw = bbuf_write(read(message, min(body_len, 1048576), end_time))
-              if not bw:
-                raise
-              body_len -= bw
-            except:
-              error(bbuf.read())
-        else:
-          try:
-            bbuf_write(msg[body_pos:body_pos+body_len])
-          except:
-            error()
-        while bbuf.pending > length:
-          length, max_time = yield bbuf.read(length)
-          end_time = None if max_time is None else time.monotonic() + max_time
-      else:
-        buff = msg[body_pos:]
-        while True:
-          chunk_pos = -1
-          rem_slength = max_hlength - len(buff)
-          while chunk_pos < 0:
-            buff = buff.lstrip(b'\r\n')
-            chunk_pos = buff.find(b'\r\n')
-            if chunk_pos >= 0:
-              chunk_pos += 2
-              break
-            chunk_pos = buff.find(b'\n')
-            if chunk_pos >= 0:
-              chunk_pos += 1
-              break
-            if not iss or rem_slength <= 0:
+          while bbuf.pending > length:
+            length, max_time = yield bbuf.read(length)
+            end_time = None if max_time is None else time.monotonic() + max_time
+          while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
+            if not iss:
               if bbuf.pending == length:
                 length, max_time = yield bbuf.read(length)
               error(bbuf.read())
@@ -1875,85 +1959,29 @@ class HTTPStreamMessage(HTTPMessage):
               if max_time is not False:
                 message.settimeout(max_time)
                 max_time = False
-              bloc = read(message, min(rem_slength, 1048576), end_time)
+              bloc = read(message, 1048576, end_time)
               if not bloc:
                 raise
             except:
               if bbuf.pending == length:
                 length, max_time = yield bbuf.read(length)
               error(bbuf.read())
-            rem_slength -= len(bloc)
             buff = buff + bloc
+          if len(buff) - chunk_pos > 2:
+            cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
+        if bbuf.pending:
+          for dec in hce:
+            if isinstance(dec, str):
+              error(bbuf.read())
+            elif not dec.eof:
+              error(bbuf.read())
+        return bbuf.read()
+      finally:
+        if iss:
           try:
-            chunk_len = int(buff[:chunk_pos].split(b';', 1)[0].rstrip(b'\r\n'), 16)
-            if not chunk_len:
-              break
+            message.settimeout(mto)
           except:
-            if bbuf.pending == length:
-              length, max_time = yield bbuf.read(length)
-            error(bbuf.read())
-          if len(buff) < chunk_pos + chunk_len:
-            try:
-              chunk_len -= bbuf_write(buff[chunk_pos:])
-            except:
-              error(bbuf.read())
-            if not iss:
-              while bbuf.pending >= length:
-                length, max_time = yield bbuf.read(length)
-              error(bbuf.read())
-            while chunk_len:
-              while bbuf.pending >= length:
-                length, max_time = yield bbuf.read(length)
-                end_time = None if max_time is None else time.monotonic() + max_time
-              try:
-                if max_time is not False:
-                  message.settimeout(max_time)
-                  max_time = False
-                bw = bbuf_write(read(message, min(chunk_len, 1048576), end_time))
-                if not bw:
-                  raise
-                chunk_len -= bw
-              except:
-                error(bbuf.read())
-            buff = b''
-          else:
-            try:
-              bbuf_write(buff[chunk_pos:chunk_pos+chunk_len])
-            except:
-              error(bbuf.read())
-            buff = buff[chunk_pos+chunk_len:]
-          while bbuf.pending > length:
-            length, max_time = yield bbuf.read(length)
-            end_time = None if max_time is None else time.monotonic() + max_time
-        while bbuf.pending > length:
-          length, max_time = yield bbuf.read(length)
-          end_time = None if max_time is None else time.monotonic() + max_time
-        while not (b'\r\n\r\n' in buff or b'\n\n' in buff):
-          if not iss:
-            if bbuf.pending == length:
-              length, max_time = yield bbuf.read(length)
-            error(bbuf.read())
-          try:
-            if max_time is not False:
-              message.settimeout(max_time)
-              max_time = False
-            bloc = read(message, 1048576, end_time)
-            if not bloc:
-              raise
-          except:
-            if bbuf.pending == length:
-              length, max_time = yield bbuf.read(length)
-            error(bbuf.read())
-          buff = buff + bloc
-        if len(buff) - chunk_pos > 2:
-          cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
-      if bbuf.pending:
-        for dec in hce:
-          if isinstance(dec, str):
-            error(bbuf.read())
-          elif not dec.eof:
-            error(bbuf.read())
-      return bbuf.read()
+            pass
     bg = _body()
     def body(length=float('inf'), max_time=None, return_pending_on_error=False, *, callback=None):
       if math.isnan(body.__defaults__[0]):
