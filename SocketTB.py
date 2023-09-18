@@ -1057,7 +1057,6 @@ class NestedSSLContext(ssl.SSLContext):
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       sock.settimeout(rt)
-
                     if not self.inc.write(sock.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
