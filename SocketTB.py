@@ -93,7 +93,7 @@ class ISocketMeta(type):
       setattr(cls, name, cls.func_wrap('w', getattr(socket.socket, name), float('inf')))
     def attribute_error(self, *args, **kwargs):
       raise NotImplementedError()
-    for name in ('dup', 'makefile', 'connect_ex', 'ioctl', 'share'):
+    for name in ('dup', 'makefile', 'ioctl', 'share'):
       setattr(cls, name, attribute_error)
 
 
@@ -335,6 +335,27 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
+  def connect_ex(self, *args, timeout='', **kwargs):
+    rt, ul = self.lock(timeout)
+    try:
+      if self.closed:
+        raise InterruptedError()
+      self.mode = 'c'
+      ws2.WSAResetEvent(self.event)
+      try:
+        r = socket.socket.connect_ex(self, *args, **kwargs)
+        if r == 10035:
+          raise BlockingIOError
+        return r
+      except BlockingIOError:
+        if self.wait(rt):
+          lpNetworkEvents = WSANETWORKEVENTS()
+          ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(lpNetworkEvents))
+          return lpNetworkEvents.iErrorCode[4]
+      raise InterruptedError() if self.closed else TimeoutError()
+    finally:
+      self.unlock(ul)
+
   @classmethod
   def _wait_for_events(cls, timeout, events, event_c=None):
     c = len(events) if event_c is None else (len(events) + 1)
@@ -548,8 +569,8 @@ class IDSocket(ISocket):
           else:
             for m in ('r', 'a', 'w', 'c'):
               if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
-                self.events[m].set()
                 self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
+                self.events[m].set()
                 self.gen.events[m].set()
       else:
         return
@@ -654,6 +675,26 @@ class IDSocket(ISocket):
           raise InterruptedError() if self.closed else TimeoutError()
         elif self.errors['c']:
           raise ConnectionRefusedError()
+    finally:
+      self.unlock(ul)
+
+  def connect_ex(self, *args, timeout='', **kwargs):
+    rt, ul =  self.lock(timeout, 'c')
+    try:
+      self.events['c'].clear()
+      if self.closed:
+        raise InterruptedError()
+      try:
+        r = socket.socket.connect_ex(self, *args, **kwargs)
+        if r == 10035:
+          raise BlockingIOError
+        return r
+      except BlockingIOError:
+        w = self.events['c'].wait(rt)
+        self.events['c'].clear()
+        if not w or self.closed:
+          raise InterruptedError() if self.closed else TimeoutError()
+        return self.errors['c']
     finally:
       self.unlock(ul)
 
@@ -909,7 +950,7 @@ class NestedSSLContext(ssl.SSLContext):
       sock.settimeout(timeout)
       return sock, addr
 
-    def connect(self, addr, *, timeout=''):
+    def _connect(self, addr, *, timeout='', ex=False):
       if self.server_side:
         raise ValueError('can\'t connect in server-side mode')
       if self._connected or self._sslobj is not None:
@@ -918,27 +959,44 @@ class NestedSSLContext(ssl.SSLContext):
       t = time.monotonic()
       rt = self.gettimeout() if timeout == '' else timeout
       try:
+        r = 0
         if self.sock_hto:
-          self.socket.connect(addr, timeout=rt)
+          if ex:
+            r = self.socket.connect_ex(addr, timeout=rt)
+          else:
+            self.socket.connect(addr, timeout=rt)
         else:
           try:
             if timeout != '':
               to = self.socket.gettimeout()
               self.socket.settimeout(rt)
-            self.socket.connect(addr)
+            if ex:
+              r = self.socket.connect_ex(addr)
+            else:
+              self.socket.connect(addr)
           finally:
             if timeout != '':
               self.socket.settimeout(to)
-        self._connected = True
-        if self.do_handshake_on_connect:
-          if rt is not None:
-            rt += t - time.monotonic()
-            if rt < 0:
-              raise TimeoutError()
-          self.do_handshake(timeout=rt)
+        if r:
+          self._sslobj = None
+        else:
+          self._connected = True
+          if self.do_handshake_on_connect:
+            if rt is not None:
+              rt += t - time.monotonic()
+              if rt < 0:
+                raise TimeoutError()
+            self.do_handshake(timeout=rt)
+        return r
       except:
         self._sslobj = None
         raise
+
+    def connect(self, addr, *, timeout=''):
+      self._connect(addr, timeout=timeout, ex=False)
+
+    def connect_ex(self, addr, *, timeout=''):
+      return self._connect(addr, timeout=timeout, ex=True)
 
     def __del__(self):
       self.shutclose()
