@@ -1013,12 +1013,13 @@ class NestedSSLContext(ssl.SSLContext):
       return sto
 
     def interface(self, action, *args, timeout='', **kwargs):
+      sock = self._sslsocket()
       if timeout == '':
-        sock = self._sslsocket()
-        timeout = sock.gettimeout()
-        sock = sock.socket
-      else:
-        sock = self._sslsocket().socket
+        isto = timeout = sock.gettimeout()
+      elif not self.hto:
+        isto = sock.gettimeout()
+        sock.settimeout(timeout)
+      sock = sock.socket
       rt = sto = timeout
       end_time = None if timeout is None else timeout + time.monotonic()
       z = 0
@@ -1056,6 +1057,7 @@ class NestedSSLContext(ssl.SSLContext):
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       sock.settimeout(rt)
+
                     if not self.inc.write(sock.recv(self.read_ahead)):
                       raise ConnectionResetError
                 else:
@@ -1081,8 +1083,8 @@ class NestedSSLContext(ssl.SSLContext):
                 sock.sendall(self.out.read())
             return res
       finally:
-        if not self.hto and timeout is not None:
-          sock.settimeout(timeout)
+        if not self.hto:
+          sock.settimeout(isto)
 
     def do_handshake(self, timeout=''):
       return self.interface(self.sslobj._sslobj.do_handshake, timeout=timeout)
@@ -1213,7 +1215,7 @@ class NestedSSLContext(ssl.SSLContext):
     return new_callable
 
   def __getattribute__(self, name):
-    if name not in object.__getattribute__(self, '_nestedSSLContext_set') and type(object.__getattribute__(self, name)) in (types.BuiltinMethodType, types.MethodType):
+    if name not in object.__getattribute__(type(self), '_nestedSSLContext_set') and type(object.__getattribute__(self, name)) in (types.BuiltinMethodType, types.MethodType):
       return self.wrap_callable(name)
     else:
       return object.__getattribute__(self, name)
@@ -1231,7 +1233,7 @@ class NestedSSLContext(ssl.SSLContext):
     return getattr(ssl_sock.socket.__class__, 'IS_DUPLEX', False) or (isinstance(ssl_sock.socket, cls.SSLSocket) and cls._is_duplex(ssl_sock.socket))
 
   def _wrap_socket(self, ssl_sock, server_side, server_hostname, *args, **kwargs):
-    return (self._SSLDSocket if self._is_duplex(ssl_sock) else self._SSLSocket)(self, ssl_sock, server_side, server_hostname)
+    return (type(self)._SSLDSocket if self._is_duplex(ssl_sock) else type(self)._SSLSocket)(self, ssl_sock, server_side, server_hostname)
 
   def wrap_bio(self, *args, **kwargs):
     return self.DefaultSSLContext.wrap_bio(*args, **kwargs)
