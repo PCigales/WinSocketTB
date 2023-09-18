@@ -955,20 +955,20 @@ class NestedSSLContext(ssl.SSLContext):
       self.hto = ssl_sock.sock_hto
       self.inc = ssl.MemoryBIO()
       self.out = ssl.MemoryBIO()
-      self.sslobj = context.wrap_bio(self.inc, self.out, server_side, server_hostname)
+      self._sslobj = context.wrap_bio(self.inc, self.out, server_side, server_hostname)._sslobj
 
     @property
     def sslsocket(self):
       return self._sslsocket()
 
     def __getattr__(self, name):
-      return self.sslobj._sslobj.__getattribute__(name)
+      return self._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'inc', 'out', 'sslobj', 'read_ahead', 'hto'):
+      if name in ('_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'hto'):
         object.__setattr__(self, name, value)
       else:
-        self.sslobj._sslobj.__setattr__(name, value)
+        self._sslobj.__setattr__(name, value)
 
     def _read_record(self, end_time, z, sto):
       sock = self._sslsocket().socket
@@ -1043,7 +1043,7 @@ class NestedSSLContext(ssl.SSLContext):
                 sock.sendall(self.out.read())
             elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
               raise
-            if err.errno == ssl.SSL_ERROR_WANT_READ:
+            if err.errno == ssl.SSL_ERROR_WANT_READ and not self.inc.pending:
               try:
                 if self.read_ahead:
                   if end_time is not None:
@@ -1062,7 +1062,7 @@ class NestedSSLContext(ssl.SSLContext):
                 else:
                   sto = self._read_record(end_time, z, sto)
               except ConnectionResetError:
-                if action == self.sslobj._sslobj.do_handshake:
+                if action == self._sslobj.do_handshake:
                   raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
                 else:
                   raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
@@ -1086,20 +1086,20 @@ class NestedSSLContext(ssl.SSLContext):
           sock.settimeout(isto)
 
     def do_handshake(self, timeout=''):
-      return self.interface(self.sslobj._sslobj.do_handshake, timeout=timeout)
+      return self.interface(self._sslobj.do_handshake, timeout=timeout)
 
     def read(self, length=16384, buffer=None, timeout=''):
-      return self.interface(self.sslobj._sslobj.read, length, timeout=timeout) if buffer is None else self.interface(self.sslobj._sslobj.read, length, buffer, timeout=timeout)
+      return self.interface(self._sslobj.read, length, timeout=timeout) if buffer is None else self.interface(self._sslobj.read, length, buffer, timeout=timeout)
 
     def write(self, bytes, timeout=''):
-      return self.interface(self.sslobj._sslobj.write, bytes, timeout=timeout)
+      return self.interface(self._sslobj.write, bytes, timeout=timeout)
 
     def shutdown(self, timeout=''):
-      self.interface(self.sslobj._sslobj.shutdown, timeout=timeout)
+      self.interface(self._sslobj.shutdown, timeout=timeout)
       return self.sslsocket.socket
 
     def verify_client_post_handshake(self, timeout=''):
-      return self.interface(self.sslobj._sslobj.verify_client_post_handshake, timeout=timeout)
+      return self.interface(self._sslobj.verify_client_post_handshake, timeout=timeout)
 
   class _SSLDSocket(_SSLSocket):
 
@@ -1110,10 +1110,10 @@ class NestedSSLContext(ssl.SSLContext):
       self.wlock = threading.Lock()
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'inc', 'out', 'sslobj', 'read_ahead', 'hto', 'wlock', 'rcondition', 'rcounter'):
+      if name in ('_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'hto', 'wlock', 'rcondition', 'rcounter'):
         object.__setattr__(self, name, value)
       else:
-        self.sslobj._sslobj.__setattr__(name, value)
+        self._sslobj.__setattr__(name, value)
 
     def interface(self, action, *args, timeout='', **kwargs):
       if timeout == '':
@@ -1150,7 +1150,7 @@ class NestedSSLContext(ssl.SSLContext):
               self.wlock.release()
           elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
             raise
-          if err.errno == ssl.SSL_ERROR_WANT_READ:
+          if err.errno == ssl.SSL_ERROR_WANT_READ and not self.inc.pending:
             with self.rcondition:
               if self.rcounter == rc:
                 self.rcounter += 1
@@ -1174,7 +1174,7 @@ class NestedSSLContext(ssl.SSLContext):
               else:
                 sto = self._read_record(end_time, z, sto)
             except ConnectionResetError:
-              if action == self.sslobj._sslobj.do_handshake:
+              if action == self._sslobj.do_handshake:
                 raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
               else:
                 raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
