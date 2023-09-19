@@ -76,6 +76,18 @@ class CERT_CONTEXT(STRUCTURE):
 P_CERT_CONTEXT = POINTER(CERT_CONTEXT)
 
 
+def WinErrorMessage(errno):
+  m = LPCWSTR()
+  if kernel32.FormatMessageW(0x000011ff, 0, errno, 0, ctypes.byref(m), 0, 0):
+    return ctypes.wstring_at(m).rstrip(' .')
+  else:
+    return ''
+
+ClosedError = OSError(10038, WinErrorMessage(10038), None, 10038)
+AlreadyError = OSError(10037, WinErrorMessage(10037), None, 10037)
+ConResetError = OSError(10054, WinErrorMessage(10054), None, 10054)
+
+
 class ISocketMeta(type):
 
   def func_wrap(cls, mode, func, f):
@@ -121,13 +133,13 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       if self._lock.acquire():
         return None, None
       else:
-        raise InterruptedError() if self.closed else TimeoutError()
+        raise ClosedError if self.closed else TimeoutError()
     else:
       t = time.monotonic()
       if self._lock.acquire(timeout=timeout):
         return max(0, timeout + t - time.monotonic()), None
       else:
-        raise InterruptedError() if self.closed else TimeoutError()
+        raise ClosedError if self.closed else TimeoutError()
 
   def unlock(self, ul):
     self._lock.release()
@@ -174,7 +186,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       if not self.closed:
         socket.socket.shutdown(self, *args, **kwargs)
       else:
-        raise InterruptedError()
+        raise ClosedError
     finally:
       self.unlock(ul)
 
@@ -244,7 +256,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise InterruptedError()
+        raise ClosedError
       self.mode = mode
       ws2.WSAResetEvent(self.event)
       try:
@@ -257,7 +269,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           if len(args) > f and (args[f] & socket.MSG_PEEK):
             ws2.WSASetEvent(self.event)
           return func(self, *args, **kwargs)
-      raise InterruptedError() if self.closed else TimeoutError()
+      raise ClosedError if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -288,7 +300,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise InterruptedError()
+        raise ClosedError
       self.mode = 'a'
       ws2.WSAResetEvent(self.event)
       self.gettimeout = lambda : None
@@ -310,16 +322,33 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         isock.settimeout(self.timeout)
         isock.mode = 'r'
         return (isock, a[1])
-      raise InterruptedError() if self.closed else TimeoutError()
+      raise ClosedError if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
+
+  def _connect_pending_check(self, rt):
+    self.mode = 'w'
+    self.mode = 'c'
+    if rt is not None:
+      end_time = rt + time.monotonic()
+    if self.wait(rt):
+      del self._connect_pending
+      return None if rt is None else max(end_time - time.monotonic(), 0)
+    else:
+      return True
+
+  def _connect_pending(self, rt):
+    self.mode = 'c'
+    return rt
 
   def connect(self, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise InterruptedError()
-      self.mode = 'c'
+        raise ClosedError
+      rt = self._connect_pending(rt)
+      if rt is True:
+        raise AlreadyError
       ws2.WSAResetEvent(self.event)
       try:
         socket.socket.connect(self, *args, **kwargs)
@@ -330,8 +359,13 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           if self.wait(0):
             return
           else:
-            raise ConnectionRefusedError()
-      raise InterruptedError() if self.closed else TimeoutError()
+            err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            raise OSError(err, WinErrorMessage(err), None, err)
+      if self.closed:
+        raise ClosedError
+      else:
+        self._connect_pending = self._connect_pending_check
+        raise TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -339,20 +373,24 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise InterruptedError()
-      self.mode = 'c'
+        return 10038
+      rt = self._connect_pending(rt)
+      if rt is True:
+        return 10037
       ws2.WSAResetEvent(self.event)
       try:
         r = socket.socket.connect_ex(self, *args, **kwargs)
         if r == 10035:
-          raise BlockingIOError
+          raise BlockingIOError()
         return r
       except BlockingIOError:
         if self.wait(rt):
-          lpNetworkEvents = WSANETWORKEVENTS()
-          ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(lpNetworkEvents))
-          return lpNetworkEvents.iErrorCode[4]
-      raise InterruptedError() if self.closed else TimeoutError()
+          return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+      if self.closed:
+        return 10038
+      else:
+        self._connect_pending = self._connect_pending_check
+        return 10035
     finally:
       self.unlock(ul)
 
@@ -390,6 +428,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         return ()
       locks += 1
       if event is not None:
+        isock.mode = 'r' if event != 'r' else 'w'
         isock.mode = event
       if timeout is not None:
         rt = timeout + t - time.monotonic()
@@ -527,7 +566,7 @@ class IDSocket(ISocket):
         if a:
           return None, (a_r, a_w)
         else:
-          raise InterruptedError() if self.closed else TimeoutError()
+          raise ClosedError if self.closed else TimeoutError()
       else:
         t = time.monotonic()
         if not a:
@@ -535,7 +574,7 @@ class IDSocket(ISocket):
         if a:
           return timeout + t - time.monotonic(), (a_r, a_w)
         else:
-          raise InterruptedError() if self.closed else TimeoutError()
+          raise ClosedError if self.closed else TimeoutError()
 
   def unlock(self, ul):
     a_r, a_w = ul
@@ -558,9 +597,13 @@ class IDSocket(ISocket):
     e = self.event
     f = SOCKET(self.sock_fileno)
     lpNetworkEvents = WSANETWORKEVENTS()
+    cEvents = ULONG(1)
+    fWaitAll = BOOL(False)
+    dwTimeout = ULONG(-1)
+    fAlertable = BOOL(False)
     while not self.closed:
       del self
-      ws2.WSAWaitForMultipleEvents(ULONG(1), byref(e), BOOL(False), ULONG(-1), BOOL(False))
+      ws2.WSAWaitForMultipleEvents(cEvents, byref(e), fWaitAll, dwTimeout, fAlertable)
       self = ref()
       if self:
         if not self.closed:
@@ -571,12 +614,16 @@ class IDSocket(ISocket):
               if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
                 self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
                 self.events[m].set()
-                self.gen.events[m].set()
+                ev = self.gen.events[m]
+                if ev is not None:
+                  ev.set()
       else:
         return
     for m in ('r', 'a', 'w', 'c'):
       self.events[m].set()
-      self.gen.events[m].set()
+      ev = self.gen.events[m]
+      if ev is not None:
+        ev.set()
     del self
 
   def wait_start(self):
@@ -589,7 +636,7 @@ class IDSocket(ISocket):
     try:
       self.events[m].clear()
       if self.closed:
-        raise InterruptedError()
+        raise ClosedError
       end_time = None
       while True:
         try:
@@ -604,13 +651,12 @@ class IDSocket(ISocket):
             else:
               rt = end_time - time.monotonic()
           if self.events[m].wait(rt):
-            if len(args) <= f or not (args[f] & socket.MSG_PEEK):
-              self.events[m].clear()
+            self.events[m].clear()
             if self.closed:
-              raise InterruptedError()
+              raise ClosedError
           else:
             break
-      raise InterruptedError() if self.closed else TimeoutError()
+      raise ClosedError if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -626,7 +672,7 @@ class IDSocket(ISocket):
     try:
       self.events['a'].clear()
       if self.closed:
-        raise InterruptedError()
+        raise ClosedError
       end_time = None
       a = None
       while True:
@@ -644,7 +690,7 @@ class IDSocket(ISocket):
           if self.events['a'].wait(rt):
             self.events['a'].clear()
             if self.closed:
-              raise InterruptedError()
+              raise ClosedError
           else:
             break
         finally:
@@ -656,45 +702,77 @@ class IDSocket(ISocket):
         isock = self.gen.wrap(a[0])
         isock.settimeout(self.timeout)
         return (isock, a[1])
-      raise InterruptedError() if self.closed else TimeoutError()
+      raise ClosedError if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
+
+  def _connect_pending_check(self, rt):
+    if rt is not None:
+      end_time = rt + time.monotonic()
+    if self.events['c'].wait(rt):
+      del self._connect_pending
+      return None if rt is None else max(end_time - time.monotonic(), 0)
+    else:
+      return True
+
+  def _connect_pending(self, rt):
+    return rt
 
   def connect(self, *args, timeout='', **kwargs):
     rt, ul =  self.lock(timeout, 'c')
     try:
-      self.events['c'].clear()
       if self.closed:
-        raise InterruptedError()
+        raise ClosedError
+      rt = self._connect_pending(rt)
+      if rt is True:
+        raise AlreadyError
+      self.events['c'].clear()
       try:
         socket.socket.connect(self, *args, **kwargs)
+        self._connect_pending = self._connect_pending_check
+        return
       except BlockingIOError:
-        w = self.events['c'].wait(rt)
-        self.events['c'].clear()
-        if not w or self.closed:
-          raise InterruptedError() if self.closed else TimeoutError()
-        elif self.errors['c']:
-          raise ConnectionRefusedError()
+        if self.events['c'].wait(rt):
+          if self.errors['c']:
+            err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            raise OSError(err, WinErrorMessage(err), None, err)
+          else:
+            return
+      except OSError as err:
+        if err.winerror is not None:
+          self._connect_pending = self._connect_pending_check
+        raise
+      if self.closed:
+        raise ClosedError
+      else:
+        self._connect_pending = self._connect_pending_check
+        raise TimeoutError()
     finally:
       self.unlock(ul)
 
   def connect_ex(self, *args, timeout='', **kwargs):
     rt, ul =  self.lock(timeout, 'c')
     try:
-      self.events['c'].clear()
       if self.closed:
-        raise InterruptedError()
+        return 10038
+      rt = self._connect_pending(rt)
+      if rt is True:
+        return 10037
+      self.events['c'].clear()
       try:
         r = socket.socket.connect_ex(self, *args, **kwargs)
         if r == 10035:
-          raise BlockingIOError
+          raise BlockingIOError()
+        self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
-        w = self.events['c'].wait(rt)
-        self.events['c'].clear()
-        if not w or self.closed:
-          raise InterruptedError() if self.closed else TimeoutError()
-        return self.errors['c']
+        if self.events['c'].wait(rt):
+          return self.errors['c']
+      if self.closed:
+        return 10038
+      else:
+        self._connect_pending = self._connect_pending_check
+        return 10035
     finally:
       self.unlock(ul)
 
@@ -710,18 +788,24 @@ class IDSocketGenerator(ISocketGenerator):
   def __init__(self):
     super().__init__()
     self.idsockets = self.isockets
-    self.events = {m: threading.Event() for m in ('r', 'a', 'w', 'c')}
+    self.events = {m: None for m in ('r', 'a', 'w', 'c')}
 
   def waitany(self, timeout, event):
     if not event in ('r', 'a', 'w', 'c') or self.closed:
       return ()
-    self.events[event].clear()
+    with self.lock:
+      if self.events[event] is not None:
+        return ()
+      self.events[event] = threading.Event()
     r = tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
-    if r:
-      return r
-    if self.events[event].wait(timeout) and not self.closed:
-      self.events[event].clear()
-      return tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
+    try:
+      if r:
+        return r
+      if self.events[event].wait(timeout) and not self.closed:
+        self.events[event].clear()
+        return tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
+    finally:
+      self.events[event] = None
     return ()
 
 
@@ -1046,7 +1130,7 @@ class NestedSSLContext(ssl.SSLContext):
             sock.settimeout(rt)
           b_ = sock.recv(5 - len(bl))
         if not b_:
-          raise ConnectionResetError
+          raise ConResetError
         bl += b_
       l = int.from_bytes(bl[3:5], 'big')
       self.inc.write(bl)
@@ -1065,7 +1149,7 @@ class NestedSSLContext(ssl.SSLContext):
             sock.settimeout(rt)
           b_ = sock.recv(l)
         if not b_:
-          raise ConnectionResetError
+          raise ConResetError
         l -= len(b_)
         self.inc.write(b_)
       return sto
@@ -1099,8 +1183,6 @@ class NestedSSLContext(ssl.SSLContext):
                   sto = rt
                   sock.settimeout(rt)
                 sock.sendall(self.out.read())
-            elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
-              raise
             if err.errno == ssl.SSL_ERROR_WANT_READ and not self.inc.pending:
               try:
                 if self.read_ahead:
@@ -1110,18 +1192,18 @@ class NestedSSLContext(ssl.SSLContext):
                       raise TimeoutError(10060, 'timed out')
                   if self.hto:
                     if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
-                      raise ConnectionResetError
+                      raise ConResetError
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       sock.settimeout(rt)
                     if not self.inc.write(sock.recv(self.read_ahead)):
-                      raise ConnectionResetError
+                      raise ConResetError
                 else:
                   sto = self._read_record(end_time, z, sto)
               except ConnectionResetError:
                 if action == self._sslobj.do_handshake:
-                  raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+                  raise ConResetError
                 else:
                   raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
             z = -1
@@ -1206,8 +1288,6 @@ class NestedSSLContext(ssl.SSLContext):
                 sock.sendall(b, timeout=rt)
             finally:
               self.wlock.release()
-          elif err.errno == ssl.SSL_ERROR_WANT_WRITE:
-            raise
           if err.errno == ssl.SSL_ERROR_WANT_READ and not self.inc.pending:
             with self.rcondition:
               if self.rcounter == rc:
@@ -1228,12 +1308,12 @@ class NestedSSLContext(ssl.SSLContext):
                   if rt < 0:
                     raise TimeoutError(10060, 'timed out')
                 if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
-                  raise ConnectionResetError
+                  raise ConResetError
               else:
                 sto = self._read_record(end_time, z, sto)
             except ConnectionResetError:
               if action == self._sslobj.do_handshake:
-                raise ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host')
+                raise ConResetError
               else:
                 raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
             finally:
