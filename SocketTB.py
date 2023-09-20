@@ -30,7 +30,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'TCPIServer', 'RequestHandler', 'MultiUDPIServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
+__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'TCPIServer', 'TCPIDServer', 'RequestHandler', 'MultiUDPIServer', 'MultiUDPIDServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -156,9 +156,8 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
-  @mode.setter
-  def mode(self, value):
-    if self._mode == value or (self.closed and value is not None):
+  def _set_mode(self, value):
+    if self.closed and value is not None:
       return
     self._mode = value
     ws2.WSAEventSelect(SOCKET(self.sock_fileno), WSAEVENT(None), LONG(0))
@@ -168,6 +167,11 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     else:
       ws2.WSACloseEvent(self.event)
       self.gen.isockets[self] = False
+
+  @mode.setter
+  def mode(self, value):
+    if self._mode != value:
+      self._set_mode(value)
 
   def unwrap(self, *, timeout=''):
     rt, ul = self.lock(timeout)
@@ -331,8 +335,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.unlock(ul)
 
   def _connect_pending_check(self, rt):
-    self.mode = 'w'
-    self.mode = 'c'
+    self._set_mode('c')
     if rt is not None:
       end_time = rt + time.monotonic()
     if self.wait(rt):
@@ -432,8 +435,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         return ()
       locks += 1
       if event is not None:
-        isock.mode = 'r' if event != 'r' else 'w'
-        isock.mode = event
+        isock._set_mode(event)
       if timeout is not None:
         rt = timeout + t - time.monotonic()
     isocks_ = tuple(isock for isock in isocks if isock.mode)
@@ -533,19 +535,90 @@ class IDSocket(ISocket):
 
   MODES = {'u': LONG(59)}
   MODES_M = {'r': 33, 'a': 8, 'w': 34, 'c': 16}
-  MODES_I = {'r': 0, 'a': 3, 'w': 1, 'c': 4}
   IS_DUPLEX = True
+
+  class RevertibleEvent:
+
+    __slots__ = ('_cond', '_flag', '_ex_flag')
+
+    def __init__(self, lock=None):
+      self._cond = threading.Condition(lock or threading.Lock())
+      self._ex_flag = self._flag = False
+
+    def __repr__(self):
+      return '%s: %s>' % (object.__repr__(self)[:-1], ('set' if self._flag else 'unset'))
+
+    def is_set(self):
+      return self._flag
+
+    def was_set(self):
+      return self._ex_flag
+
+    def set(self):
+      with self._cond:
+        self._ex_flag = self._flag
+        self._flag = True
+        self._cond.notify_all()
+      return self._ex_flag
+
+    def unset(self):
+      with self._cond:
+        ex_flag = self._flag
+        self._flag &= self._ex_flag
+        self._ex_flag = ex_flag
+      return self._ex_flag
+
+    def clear(self):
+      with self._cond:
+        self._ex_flag = self._flag
+        self._flag = False
+      return self._ex_flag
+
+    def unclear(self):
+      with self._cond:
+        ex_flag = self._flag
+        self._flag |= self._ex_flag
+        self._ex_flag = ex_flag
+      return self._ex_flag
+
+    def wait(self, timeout=None):
+      with self._cond:
+        return True if self._flag else self._cond.wait(timeout)
+
+  class CountedWSAEvent:
+
+    __slots__ = ('_event', '_lock', '_counter')
+
+    def __init__(self):
+      self._counter = 0
+      self._lock = threading.Lock()
+      self._event = WSAEVENT(ws2.WSACreateEvent())
+
+    def inc(self):
+      with self._lock:
+        if not self._counter:
+          ws2.WSASetEvent(self._event)
+        self._counter += 1
+
+    def dec(self):
+      with self._lock:
+        self._counter -= 1
+        if not self._counter:
+          ws2.WSAResetEvent(self._event)
+
+    def close(self):
+      ws2.WSACloseEvent(self._event)
+
+    def __del__(self):
+      self.close()
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     super().__init__(gen, family, type, proto, fileno, timeout)
     self._condition = threading.Condition(self._lock)
     self._queue_r = deque()
     self._queue_w = deque()
-    self.events = {m: threading.Event() for m in ('r', 'a', 'w', 'c')}
-    self.errors = {m: 0 for m in ('r', 'a', 'w', 'c')}
-    self._waiting = 0
-    self._wlock = threading.Lock()
-    self._wevent = WSAEVENT(ws2.WSACreateEvent())
+    self._elock = threading.RLock()
+    self.events = {m: self.__class__.RevertibleEvent(self._elock) for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
   def lock(self, timeout='', mode='u'):
@@ -597,9 +670,7 @@ class IDSocket(ISocket):
       self._condition.notify_all()
 
   def _close(self):
-    with self._wlock:
-      ws2.WSASetEvent(self._wevent)
-      self._waiting += 1
+    self._wevent.inc()
     super()._close()
 
   @staticmethod
@@ -611,7 +682,7 @@ class IDSocket(ISocket):
     f = SOCKET(self.sock_fileno)
     NetworkEvents = WSANETWORKEVENTS()
     cEvents = ULONG(2)
-    hEvents = (WSAEVENT*2)(e, self._wevent)
+    hEvents = (WSAEVENT*2)(e, self._wevent._event)
     fWaitAll = BOOL(True)
     dwTimeout = ULONG(-1)
     fAlertable = BOOL(False)
@@ -621,12 +692,12 @@ class IDSocket(ISocket):
       self = ref()
       if self:
         if not self.closed:
+         with self._elock:
           if ws2.WSAEnumNetworkEvents(f, e, byref(NetworkEvents)):
             ws2.WSAResetEvent(e)
           else:
             for m in ('r', 'a', 'w', 'c'):
               if NetworkEvents.lNetworkEvents & self.MODES_M[m]:
-                self.errors[m] = NetworkEvents.iErrorCode[self.MODES_I[m]]
                 self.events[m].set()
                 ev = self.gen.events[m]
                 if ev is not None:
@@ -638,35 +709,31 @@ class IDSocket(ISocket):
       ev = self.gen.events[m]
       if ev is not None:
         ev.set()
+    self._wevent.close()
     del self
 
   def wait_start(self):
     self.mode = 'u'
+    self._wevent = self.__class__.CountedWSAEvent()
     t = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
     t.start()
 
   def wait(self, timeout, mode):
     if not self.mode:
       return False
-    with self._wlock:
-      if not self._waiting:
-        ws2.WSASetEvent(self._wevent)
-      self._waiting += 1
+    self._wevent.inc()
     w = self.events[mode].wait(timeout)
-    with self._wlock:
-      self._waiting -= 1
-      if not self._waiting:
-        ws2.WSAResetEvent(self._wevent)
+    self._wevent.dec()
     return w and self.mode
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout, m)
     try:
-      self.events[m].clear()
       if self.closed:
         raise ClosedError
       end_time = None
       while True:
+        self.events[m].clear()
         try:
           r = func(self, *args, **kwargs)
           if len(args) > f and (args[f] & socket.MSG_PEEK):
@@ -678,10 +745,15 @@ class IDSocket(ISocket):
               end_time = rt + time.monotonic()
             else:
               rt = end_time - time.monotonic()
-          if self.wait(rt, m):
-            self.events[m].clear()
-          else:
+          if not self.wait(rt, m):
             break
+        except OSError as err:
+          if err.winerror is None:
+            self.events[m].unclear()
+          raise
+        except:
+          self.events[m].unclear()
+          raise
       raise ClosedError if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
@@ -696,12 +768,12 @@ class IDSocket(ISocket):
   def accept(self, timeout='', *args, **kwargs):
     rt, ul = self.lock(timeout, 'a')
     try:
-      self.events['a'].clear()
       if self.closed:
         raise ClosedError
       end_time = None
       a = None
       while True:
+        self.events['a'].clear()
         self.gettimeout = lambda : None
         try:
           a = socket.socket.accept(self, *args, **kwargs)
@@ -713,10 +785,15 @@ class IDSocket(ISocket):
             else:
               rt = end_time - time.monotonic()
           del self.gettimeout
-          if self.wait(rt, 'a'):
-            self.events['a'].clear()
-          else:
+          if not self.wait(rt, 'a'):
             break
+        except OSError as err:
+          if err.winerror is None:
+            self.events['a'].unclear()
+          raise
+        except:
+          self.events['a'].unclear()
+          raise
         finally:
           try:
             del self.gettimeout
@@ -757,14 +834,19 @@ class IDSocket(ISocket):
         return
       except BlockingIOError:
         if self.wait(rt, 'c'):
-          if self.errors['c']:
-            err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+          err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+          if err:
             raise OSError(err, WinErrorMessage(err), None, err)
           else:
             return
       except OSError as err:
-        if err.winerror is not None:
+        if err.winerror is None:
+          self.events['c'].unclear()
+        else:
           self._connect_pending = self._connect_pending_check
+        raise
+      except:
+        self.events['c'].unclear()
         raise
       if self.closed:
         raise ClosedError
@@ -791,7 +873,10 @@ class IDSocket(ISocket):
         return r
       except BlockingIOError:
         if self.wait(rt, 'c'):
-          return self.errors['c']
+          return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+      except:
+        self.events['c'].unclear()
+        raise
       if self.closed:
         return 10038
       else:
@@ -821,28 +906,16 @@ class IDSocketGenerator(ISocketGenerator):
       if self.events[event] is not None:
         return ()
       self.events[event] = threading.Event()
-    idsocks = set()
-    for idsock in self.idsockets:
-      if idsock.closed:
-        continue
-      idsocks.add(weakref.ref(idsock))
-      with idsock._wlock:
-        ws2.WSASetEvent(idsock._wevent)
-        idsock._waiting += 1
-    r = tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
+    idsocks = tuple(idsock for idsock, activ in self.idsockets.items() if (activ and (idsock._wevent.inc() or True)))
+    r = tuple(idsock for idsock in idsocks if (idsock.mode and idsock.events[event].is_set()))
     try:
       if r:
         return r
       if self.events[event].wait(timeout) and not self.closed:
-        self.events[event].clear()
-        return tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
+        return tuple(idsock for idsock in idsocks if idsock.mode and idsock.events[event].is_set())
     finally:
-      for idsock in self.idsockets:
-        if weakref.ref(idsock) in idsocks:
-          with idsock._wlock:
-            idsock._waiting -= 1
-            if not idsock._waiting:
-              ws2.WSAResetEvent(idsock._wevent)
+      for idsock in idsocks:
+        idsock._wevent.dec()
       self.events[event] = None
     return ()
 
@@ -2686,12 +2759,25 @@ class BaseIServer:
     self.shutdown()
 
 
+class MixinIDServer:
+  
+  CLASS = IDSocketGenerator
+
+  def __init_subclass__(cls):
+    if 'multi' in cls.__name__.lower():
+      cls.idsockets = property(lambda self: self.isockets)
+    else:
+      cls.idsocket = property(lambda self: self.isocket)
+
+
 class UDPIServer(BaseIServer):
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False, isocket_gen_class=None):
+  CLASS = ISocketGenerator
+
+  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
     self.max_packet_size = max_packet_size
     self.multicast_membership = multicast_membership
-    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, isocket_gen_class)
+    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, self.__class__.CLASS)
 
   def _server_initiate(self):
     self.isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
@@ -2714,9 +2800,16 @@ class UDPIServer(BaseIServer):
     pass
 
 
+class UDPIDServer(MixinIDServer, UDPIServer):
+
+  pass
+
+
 class TCPIServer(BaseIServer):
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, request_queue_size=10, threaded=False, daemon_thread=False, isocket_gen_class=None, nssl_context=None):
+  CLASS = ISocketGenerator
+
+  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, request_queue_size=10, threaded=False, daemon_thread=False, nssl_context=None):
     self.request_queue_size = request_queue_size
     self.nssl_context = nssl_context
     if self.nssl_context is True:
@@ -2725,7 +2818,7 @@ class TCPIServer(BaseIServer):
       with RSASelfSigned('TCPIServer' + cid, 1) as cert:
         cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
         self.nssl_context.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
-    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, isocket_gen_class)
+    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, self.__class__.CLASS)
 
   def _server_initiate(self):
     self.isocket = self.isocketgen(type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
@@ -2740,13 +2833,18 @@ class TCPIServer(BaseIServer):
     self.isocket.listen(self.request_queue_size)
 
   def _get_request(self):
-    return self.isocket.accept()
+    return self.isocket.accept(timeout=0)
 
   def _handle_request(self, request, client_address):
     self.request_handler_class(request, client_address, self)
 
   def _close_request(self, request):
     request.shutclose()
+
+
+class TCPIDServer(MixinIDServer, TCPIServer):
+
+  pass
 
 
 class RequestHandler:
@@ -2774,10 +2872,12 @@ class RequestHandler:
 
 class MultiUDPIServer(UDPIServer):
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False, isocket_gen_class=None):
+  CLASS = ISocketGenerator
+
+  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
     if isinstance(server_address, int):
       server_address = tuple((ip, server_address) for ip in MultiUDPIServer.retrieve_ips())
-    super().__init__(server_address, request_handler_class, allow_reuse_address, multicast_membership, dual_stack, max_packet_size, threaded, daemon_thread, isocket_gen_class)
+    super().__init__(server_address, request_handler_class, allow_reuse_address, multicast_membership, dual_stack, max_packet_size, threaded, daemon_thread)
 
   @staticmethod
   def retrieve_ips():
@@ -2804,7 +2904,7 @@ class MultiUDPIServer(UDPIServer):
         self.isockets[a].setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(addr[0])))
 
   def _get_request(self, isocket):
-    return isocket.recvfrom(self.max_packet_size)
+    return isocket.recvfrom(self.max_packet_size, timeout=0)
 
   def _handle_request(self, request, client_address, isocket):
     self.request_handler_class((request, isocket), client_address, self)
@@ -2827,17 +2927,25 @@ class MultiUDPIServer(UDPIServer):
     while not self.closed:
       try:
         for isock in self.isocketgen.waitany(None, 'r'):
-          request, client_address = self._get_request(isock)
-          if self.closed:
-            break
-          if self.threaded:
-            th = threading.Thread(target=self._process_request, args=(request, client_address, isock), daemon=self.daemon_thread)
-            self.threads.add(th)
-            th.start()
-          else:
-            self._process_request(request, client_address, isock)
+          try:
+            request, client_address = self._get_request(isock)
+            if self.closed:
+              break
+            if self.threaded:
+              th = threading.Thread(target=self._process_request, args=(request, client_address, isock), daemon=self.daemon_thread)
+              self.threads.add(th)
+              th.start()
+            else:
+              self._process_request(request, client_address, isock)
+          except:
+            pass
       except:
         pass
+
+
+class MultiUDPIDServer(MixinIDServer, MultiUDPIServer):
+
+  pass
 
 
 class WebSocketHandler:
@@ -3424,14 +3532,13 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
       del self.channel.handlers[self]
 
 
-class WebSocketIDServer(TCPIServer):
+class WebSocketIDServer(TCPIDServer):
 
   def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=100, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
-    super().__init__(server_address, WebSocketRequestHandler, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, IDSocketGenerator, nssl_context)
+    super().__init__(server_address, WebSocketRequestHandler, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, nssl_context)
     self.address = server_address
     self.channels = {}
     self.inactive_maxtime = inactive_maxtime
-    self.idsocket = self.isocket
 
   def _sendevents_dispatcher(self, channel):
     with channel.datastore.outgoing_condition:
