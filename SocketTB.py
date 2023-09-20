@@ -20,6 +20,10 @@ import base64
 import hmac
 import zlib
 import gzip
+try:
+  import brotli
+except:
+  brotli = None
 import os
 import hashlib
 import struct
@@ -1650,7 +1654,7 @@ class HTTPMessage:
       if decompress and body_len != 0:
         hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
         for ce in hce:
-          if not ce in ('deflate', 'gzip'):
+          if not ce in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
             if http_message.method is not None and iss:
               try:
                 write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
@@ -1802,6 +1806,8 @@ class HTTPMessage:
                   http_message.body = zlib.decompress(http_message.body, wbits=-15)
               elif ce == 'gzip':
                 http_message.body = gzip.decompress(http_message.body)
+              elif ce == 'br':
+                http_message.body = brotli.decompress(http_message.body)
               else:
                 raise
           if decode:
@@ -1896,7 +1902,7 @@ class HTTPStreamMessage(HTTPMessage):
       if decompress and body_len != 0:
         hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
         for ce in hce:
-          if not ce in ('deflate', 'gzip'):
+          if not ce in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
             if http_message.method is not None and iss:
               try:
                 write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
@@ -1925,6 +1931,14 @@ class HTTPStreamMessage(HTTPMessage):
         e = GeneratorExit()
         e.value = value or None
         raise e
+      class brotli_decompressor:
+        def __init__(self):
+          self.decompressor = brotli.Decompressor()
+        def decompress(self, data):
+          return self.decompressor.process(data)
+        @property
+        def eof(self):
+          return self.decompressor.is_finished()
       def decompress(data, i):
         if data:
           dec = hce[i]
@@ -1935,7 +1949,9 @@ class HTTPStreamMessage(HTTPMessage):
               else:
                 dec = hce[i] = zlib.decompressobj(wbits=-15)
             elif dec == 'gzip':
-                dec = hce[i] = zlib.decompressobj(wbits=31)
+              dec = hce[i] = zlib.decompressobj(wbits=31)
+            elif dec == 'br':
+              dec = hce[i] = brotli_decompressor()
             else:
               raise
           return dec.decompress(data)
@@ -2226,7 +2242,7 @@ class HTTPBaseRequest:
       if hexp:
         headers['Expect'] = '100-continue'
       if not 'accept-encoding' in (k.lower() for k, v in hitems):
-        headers['Accept-Encoding'] = 'identity, deflate, gzip' if decompress else 'identity'
+        headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip')if decompress else 'identity'
       if data is not None:
         if not 'chunked' in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
           headers['Content-Length'] = str(len(data))
