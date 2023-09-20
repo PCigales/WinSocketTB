@@ -2791,7 +2791,7 @@ class UDPIServer(BaseIServer):
       self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
 
   def _get_request(self):
-    return self.isocket.recvfrom(self.max_packet_size)
+    return self.isocket.recvfrom(self.max_packet_size, timeout=0)
 
   def _handle_request(self, request, client_address):
     self.request_handler_class((request, self.isocket), client_address, self)
