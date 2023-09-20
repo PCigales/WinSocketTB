@@ -543,6 +543,9 @@ class IDSocket(ISocket):
     self._queue_w = deque()
     self.events = {m: threading.Event() for m in ('r', 'a', 'w', 'c')}
     self.errors = {m: 0 for m in ('r', 'a', 'w', 'c')}
+    self._waiting = 0
+    self._wlock = threading.Lock()
+    self._wevent = WSAEVENT(ws2.WSACreateEvent())
     self.wait_start()
 
   def lock(self, timeout='', mode='u'):
@@ -593,6 +596,12 @@ class IDSocket(ISocket):
           self._queue_w.popleft()
       self._condition.notify_all()
 
+  def _close(self):
+    with self._wlock:
+      ws2.WSASetEvent(self._wevent)
+      self._waiting += 1
+    super()._close()
+
   @staticmethod
   def _wait(ref):
     self = ref()
@@ -600,23 +609,24 @@ class IDSocket(ISocket):
       return
     e = self.event
     f = SOCKET(self.sock_fileno)
-    lpNetworkEvents = WSANETWORKEVENTS()
-    cEvents = ULONG(1)
-    fWaitAll = BOOL(False)
+    NetworkEvents = WSANETWORKEVENTS()
+    cEvents = ULONG(2)
+    hEvents = (WSAEVENT*2)(e, self._wevent)
+    fWaitAll = BOOL(True)
     dwTimeout = ULONG(-1)
     fAlertable = BOOL(False)
     while not self.closed:
       del self
-      ws2.WSAWaitForMultipleEvents(cEvents, byref(e), fWaitAll, dwTimeout, fAlertable)
+      ws2.WSAWaitForMultipleEvents(cEvents, byref(hEvents), fWaitAll, dwTimeout, fAlertable)
       self = ref()
       if self:
         if not self.closed:
-          if ws2.WSAEnumNetworkEvents(f, e, byref(lpNetworkEvents)):
+          if ws2.WSAEnumNetworkEvents(f, e, byref(NetworkEvents)):
             ws2.WSAResetEvent(e)
           else:
             for m in ('r', 'a', 'w', 'c'):
-              if lpNetworkEvents.lNetworkEvents & self.MODES_M[m]:
-                self.errors[m] = lpNetworkEvents.iErrorCode[self.MODES_I[m]]
+              if NetworkEvents.lNetworkEvents & self.MODES_M[m]:
+                self.errors[m] = NetworkEvents.iErrorCode[self.MODES_I[m]]
                 self.events[m].set()
                 ev = self.gen.events[m]
                 if ev is not None:
@@ -634,6 +644,20 @@ class IDSocket(ISocket):
     self.mode = 'u'
     t = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
     t.start()
+
+  def wait(self, timeout, mode):
+    if not self.mode:
+      return False
+    with self._wlock:
+      if not self._waiting:
+        ws2.WSASetEvent(self._wevent)
+      self._waiting += 1
+    w = self.events[mode].wait(timeout)
+    with self._wlock:
+      self._waiting -= 1
+      if not self._waiting:
+        ws2.WSAResetEvent(self._wevent)
+    return w and self.mode
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
     rt, ul = self.lock(timeout, m)
@@ -654,10 +678,8 @@ class IDSocket(ISocket):
               end_time = rt + time.monotonic()
             else:
               rt = end_time - time.monotonic()
-          if self.events[m].wait(rt):
+          if self.wait(rt, m):
             self.events[m].clear()
-            if self.closed:
-              raise ClosedError
           else:
             break
       raise ClosedError if self.closed else TimeoutError()
@@ -691,10 +713,8 @@ class IDSocket(ISocket):
             else:
               rt = end_time - time.monotonic()
           del self.gettimeout
-          if self.events['a'].wait(rt):
+          if self.wait(rt, 'a'):
             self.events['a'].clear()
-            if self.closed:
-              raise ClosedError
           else:
             break
         finally:
@@ -713,7 +733,7 @@ class IDSocket(ISocket):
   def _connect_pending_check(self, rt):
     if rt is not None:
       end_time = rt + time.monotonic()
-    if self.events['c'].wait(rt):
+    if self.wait(rt, 'c'):
       del self._connect_pending
       return None if rt is None else max(end_time - time.monotonic(), 0)
     else:
@@ -736,7 +756,7 @@ class IDSocket(ISocket):
         self._connect_pending = self._connect_pending_check
         return
       except BlockingIOError:
-        if self.events['c'].wait(rt):
+        if self.wait(rt, 'c'):
           if self.errors['c']:
             err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
             raise OSError(err, WinErrorMessage(err), None, err)
@@ -770,7 +790,7 @@ class IDSocket(ISocket):
         self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
-        if self.events['c'].wait(rt):
+        if self.wait(rt, 'c'):
           return self.errors['c']
       if self.closed:
         return 10038
@@ -801,6 +821,14 @@ class IDSocketGenerator(ISocketGenerator):
       if self.events[event] is not None:
         return ()
       self.events[event] = threading.Event()
+    idsocks = set()
+    for idsock in self.idsockets:
+      if idsock.closed:
+        continue
+      idsocks.add(weakref.ref(idsock))
+      with idsock._wlock:
+        ws2.WSASetEvent(idsock._wevent)
+        idsock._waiting += 1
     r = tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
     try:
       if r:
@@ -809,6 +837,12 @@ class IDSocketGenerator(ISocketGenerator):
         self.events[event].clear()
         return tuple(idsock for idsock in self.idsockets if not idsock.closed and idsock.events[event].is_set())
     finally:
+      for idsock in self.idsockets:
+        if weakref.ref(idsock) in idsocks:
+          with idsock._wlock:
+            idsock._waiting -= 1
+            if not idsock._waiting:
+              ws2.WSAResetEvent(idsock._wevent)
       self.events[event] = None
     return ()
 
