@@ -1830,6 +1830,15 @@ class HTTPMessage:
 
 class HTTPStreamMessage(HTTPMessage):
 
+  class brotli_decompressor:
+    def __init__(self):
+      self.decompressor = brotli.Decompressor()
+    def decompress(self, data):
+      return self.decompressor.process(data)
+    @property
+    def eof(self):
+      return self.decompressor.is_finished()
+
   def __new__(cls, message=None, decompress=True, max_hlength=1048576, max_time=None):
     http_message = HTTPExplodedMessage()
     if message is None:
@@ -1931,14 +1940,6 @@ class HTTPStreamMessage(HTTPMessage):
         e = GeneratorExit()
         e.value = value or None
         raise e
-      class brotli_decompressor:
-        def __init__(self):
-          self.decompressor = brotli.Decompressor()
-        def decompress(self, data):
-          return self.decompressor.process(data)
-        @property
-        def eof(self):
-          return self.decompressor.is_finished()
       def decompress(data, i):
         if data:
           dec = hce[i]
@@ -1951,7 +1952,7 @@ class HTTPStreamMessage(HTTPMessage):
             elif dec == 'gzip':
               dec = hce[i] = zlib.decompressobj(wbits=31)
             elif dec == 'br':
-              dec = hce[i] = brotli_decompressor()
+              dec = hce[i] = cls.brotli_decompressor()
             else:
               raise
           return dec.decompress(data)
