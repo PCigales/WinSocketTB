@@ -630,7 +630,7 @@ class IDSocket(ISocket):
     self._queue_w = deque()
     self._erlock = threading.RLock()
     self._ewlock = threading.RLock()
-    self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock} 
+    self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock}
     self.events = {m: self.__class__.RevertibleEvent(self._elock[m]) for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
@@ -985,7 +985,7 @@ class NestedSSLContext(ssl.SSLContext):
           self._sslobj = None
           return sock
         else:
-          raise ValueError("No SSL wrapper around " + str(self))
+          raise ValueError('No SSL wrapper around ' + str(self))
       finally:
         self.detach()
 
@@ -1048,7 +1048,7 @@ class NestedSSLContext(ssl.SSLContext):
       if self._sslobj:
         return self._sslobj.verify_client_post_handshake(timeout=timeout)
       else:
-        raise ValueError("No SSL wrapper around " + str(self))
+        raise ValueError('No SSL wrapper around ' + str(self))
 
     def _wrap_no_sslobj(self, func, *args, timeout='', **kwargs):
       if self.sock_hto:
@@ -1066,7 +1066,7 @@ class NestedSSLContext(ssl.SSLContext):
     def recv(self, buflen=16384, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
-          raise ValueError("non-zero flags not allowed in calls to recv() on %s" % self.__class__)
+          raise ValueError('non-zero flags not allowed in calls to recv() on %s' % self.__class__)
         try:
           return self._sslobj.read(buflen, timeout=timeout)
         except ssl.SSLEOFError:
@@ -1082,7 +1082,7 @@ class NestedSSLContext(ssl.SSLContext):
         nbytes = len(buffer) if buffer else 16384
       if self._sslobj is not None:
         if flags != 0:
-          raise ValueError("non-zero flags not allowed in calls to recv_into() on %s" % self.__class__)
+          raise ValueError('non-zero flags not allowed in calls to recv_into() on %s' % self.__class__)
         try:
           return self._sslobj.read(nbytes, buffer, timeout=timeout)
         except ssl.SSLEOFError:
@@ -1095,37 +1095,37 @@ class NestedSSLContext(ssl.SSLContext):
 
     def recvfrom(self, buflen=1024, flags=0, *, timeout=''):
       if self._sslobj is not None:
-        raise ValueError("recvfrom not allowed on instances of %s" % self.__class__)
+        raise ValueError('recvfrom not allowed on instances of %s' % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.recvfrom, buflen, flags, timeout=timeout)
 
     def recvfrom_into(self, buffer, nbytes=None, flags=0, *, timeout=''):
       if self._sslobj is not None:
-        raise ValueError("recvfrom_into not allowed on instances of %s" % self.__class__)
+        raise ValueError('recvfrom_into not allowed on instances of %s' % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.recvfrom_into, buffer, nbytes, flags, timeout=timeout)
 
     def send(self, data, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
-          raise ValueError("non-zero flags not allowed in calls to send() on %s" % self.__class__)
+          raise ValueError('non-zero flags not allowed in calls to send() on %s' % self.__class__)
         return self._sslobj.write(data, timeout=timeout)
       else:
         return self._wrap_no_sslobj(self.socket.send, data, flags, timeout=timeout)
 
     def sendto(self, data, flags_or_addr, addr=None, *, timeout=''):
       if self._sslobj is not None:
-        raise ValueError("sendto not allowed on instances of %s" % self.__class__)
+        raise ValueError('sendto not allowed on instances of %s' % self.__class__)
       else:
         return self._wrap_no_sslobj(self.socket.sendto, data, flags_or_addr, timeout=timeout) if addr is None else self._wrap_no_sslobj(self.socket.sendto, data, flags_or_addr, addr, timeout=timeout)
 
     def sendall(self, data, flags=0, *, timeout=''):
       if self._sslobj is not None:
         if flags != 0:
-          raise ValueError("non-zero flags not allowed in calls to sendall() on %s" % self.__class__)
+          raise ValueError('non-zero flags not allowed in calls to sendall() on %s' % self.__class__)
         if timeout == '':
           timeout = self.gettimeout()
-        with memoryview(data).cast("B") as m:
+        with memoryview(data).cast('B') as m:
           l = len(m)
           s = 0
           if timeout is None:
@@ -2781,7 +2781,7 @@ class BaseIServer:
 
 
 class MixinIDServer:
-  
+
   CLASS = IDSocketGenerator
 
   def __init_subclass__(cls):
@@ -3843,7 +3843,7 @@ class NTPClient:
       return None
     if to_local:
       try:
-        return datetime.datetime.fromtimestamp(ts2).strftime("%x %X.%f")[:-3]
+        return datetime.datetime.fromtimestamp(ts2).strftime('%x %X.%f')[:-3]
       except:
         return None
     return ts2
@@ -3890,7 +3890,7 @@ class TOTPassword:
 
   def get(self, clipboard=False):
     t = time.time() + self.to - self.origin
-    d = hmac.digest(self.key, int(t / self.interval).to_bytes(8, 'big', signed=False), "sha1")
+    d = hmac.digest(self.key, int(t / self.interval).to_bytes(8, 'big', signed=False), 'sha1')
     o = d[-1] & 0xf
     p = str((int.from_bytes(d[o:o+4], 'big', signed=False) & 0x7fffffff) % (10 ** self.length)).rjust(self.length, '0')
     if clipboard:
