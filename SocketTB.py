@@ -2695,7 +2695,7 @@ class BaseIServer:
       raise TypeError('the class BaseIServer is not intended to be instantiated directly')
     return object.__new__(cls)
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, threaded=False, daemon_thread=False, isocket_gen_class=None):
+  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, threaded=False, daemon_thread=False):
     self.server_address = server_address
     self.request_handler_class = request_handler_class
     self.allow_reuse_address = allow_reuse_address
@@ -2704,7 +2704,7 @@ class BaseIServer:
     self.daemon_thread = daemon_thread
     self.lock = threading.RLock()
     self.closed = None
-    self.isocketgen = (isocket_gen_class or ISocketGenerator)()
+    self.isocketgen = self.__class__.CLASS()
     self.thread = None
     self.threads = set()
     self._server_initiate()
@@ -2798,7 +2798,7 @@ class UDPIServer(BaseIServer):
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
     self.max_packet_size = max_packet_size
     self.multicast_membership = multicast_membership
-    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, self.__class__.CLASS)
+    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
     self.isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
@@ -2839,7 +2839,7 @@ class TCPIServer(BaseIServer):
       with RSASelfSigned('TCPIServer' + cid, 1) as cert:
         cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
         self.nssl_context.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
-    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread, self.__class__.CLASS)
+    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
     self.isocket = self.isocketgen(type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
