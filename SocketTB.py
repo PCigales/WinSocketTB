@@ -273,7 +273,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           ws2.WSASetEvent(self.event)
         return r
       except BlockingIOError:
-        if self.wait(rt):
+        if timeout != 0 and self.wait(rt):
           if len(args) > f and (args[f] & socket.MSG_PEEK):
             ws2.WSASetEvent(self.event)
           return func(self, *args, **kwargs)
@@ -317,7 +317,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         a = socket.socket.accept(self, *args, **kwargs)
       except BlockingIOError:
         del self.gettimeout
-        if self.wait(rt):
+        if timeout != 0 and self.wait(rt):
           self.gettimeout = lambda : None
           a = socket.socket.accept(self, *args, **kwargs)
       finally:
@@ -361,7 +361,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         socket.socket.connect(self, *args, **kwargs)
         return
       except BlockingIOError:
-        if self.wait(rt):
+        if timeout != 0 and self.wait(rt):
           self.mode = 'w'
           if self.wait(0):
             return
@@ -391,7 +391,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           raise BlockingIOError()
         return r
       except BlockingIOError:
-        if self.wait(rt):
+        if timeout != 0 and self.wait(rt):
           return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
       if self.closed:
         return 10038
@@ -561,6 +561,12 @@ class IDSocket(ISocket):
         self._cond.notify_all()
       return self._ex_flag
 
+    def setf(self):
+      self._ex_flag = self._flag
+      self._flag = True
+      self._cond.notify_all()
+      return self._ex_flag
+
     def unset(self):
       with self._cond:
         ex_flag = self._flag
@@ -572,6 +578,11 @@ class IDSocket(ISocket):
       with self._cond:
         self._ex_flag = self._flag
         self._flag = False
+      return self._ex_flag
+
+    def clearf(self):
+      self._ex_flag = self._flag
+      self._flag = False
       return self._ex_flag
 
     def unclear(self):
@@ -617,8 +628,10 @@ class IDSocket(ISocket):
     self._condition = threading.Condition(self._lock)
     self._queue_r = deque()
     self._queue_w = deque()
-    self._elock = threading.RLock()
-    self.events = {m: self.__class__.RevertibleEvent(self._elock) for m in ('r', 'a', 'w', 'c')}
+    self._erlock = threading.RLock()
+    self._ewlock = threading.RLock()
+    self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock} 
+    self.events = {m: self.__class__.RevertibleEvent(self._elock[m]) for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
   def lock(self, timeout='', mode='u'):
@@ -692,16 +705,16 @@ class IDSocket(ISocket):
       self = ref()
       if self:
         if not self.closed:
-         with self._elock:
-          if ws2.WSAEnumNetworkEvents(f, e, byref(NetworkEvents)):
-            ws2.WSAResetEvent(e)
-          else:
-            for m in ('r', 'a', 'w', 'c'):
-              if NetworkEvents.lNetworkEvents & self.MODES_M[m]:
-                self.events[m].set()
-                ev = self.gen.events[m]
-                if ev is not None:
-                  ev.set()
+          with self._erlock, self._ewlock:
+            if ws2.WSAEnumNetworkEvents(f, e, byref(NetworkEvents)):
+              ws2.WSAResetEvent(e)
+            else:
+              for m in ('r', 'a', 'w', 'c'):
+                if NetworkEvents.lNetworkEvents & self.MODES_M[m]:
+                  self.events[m].setf()
+                  ev = self.gen.events[m]
+                  if ev is not None:
+                    ev.set()
       else:
         return
     for m in ('r', 'a', 'w', 'c'):
@@ -733,13 +746,16 @@ class IDSocket(ISocket):
         raise ClosedError
       end_time = None
       while True:
-        self.events[m].clear()
         try:
-          r = func(self, *args, **kwargs)
-          if len(args) > f and (args[f] & socket.MSG_PEEK):
-            self.events[m].set()
+          with self._elock[m]:
+            self.events[m].clearf()
+            r = func(self, *args, **kwargs)
+            if len(args) > f and (args[f] & socket.MSG_PEEK):
+              self.events[m].setf()
           return r
         except BlockingIOError:
+          if timeout == 0:
+            break
           if rt is not None:
             if end_time is None:
               end_time = rt + time.monotonic()
@@ -773,12 +789,15 @@ class IDSocket(ISocket):
       end_time = None
       a = None
       while True:
-        self.events['a'].clear()
         self.gettimeout = lambda : None
         try:
-          a = socket.socket.accept(self, *args, **kwargs)
-          break
+          with self._elock['a']:
+            self.events['a'].clearf()
+            a = socket.socket.accept(self, *args, **kwargs)
+            break
         except BlockingIOError:
+          if timeout == 0:
+            break
           if rt is not None:
             if end_time is None:
               end_time = rt + time.monotonic()
@@ -827,13 +846,14 @@ class IDSocket(ISocket):
       rt = self._connect_pending(rt)
       if rt is True:
         raise AlreadyError
-      self.events['c'].clear()
       try:
-        socket.socket.connect(self, *args, **kwargs)
+        with self._elock['c']:
+          self.events['c'].clearf()
+          socket.socket.connect(self, *args, **kwargs)
         self._connect_pending = self._connect_pending_check
         return
       except BlockingIOError:
-        if self.wait(rt, 'c'):
+        if timeout != 0 and self.wait(rt, 'c'):
           err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
           if err:
             raise OSError(err, WinErrorMessage(err), None, err)
@@ -864,15 +884,16 @@ class IDSocket(ISocket):
       rt = self._connect_pending(rt)
       if rt is True:
         return 10037
-      self.events['c'].clear()
       try:
-        r = socket.socket.connect_ex(self, *args, **kwargs)
+        with self._elock['c']:
+          self.events['c'].clearf()
+          r = socket.socket.connect_ex(self, *args, **kwargs)
         if r == 10035:
           raise BlockingIOError()
         self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
-        if self.wait(rt, 'c'):
+        if timeout != 0 and self.wait(rt, 'c'):
           return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
       except:
         self.events['c'].unclear()
@@ -2791,7 +2812,7 @@ class UDPIServer(BaseIServer):
       self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
 
   def _get_request(self):
-    return self.isocket.recvfrom(self.max_packet_size, timeout=0)
+    return self.isocket.recvfrom(self.max_packet_size)
 
   def _handle_request(self, request, client_address):
     self.request_handler_class((request, self.isocket), client_address, self)
@@ -2809,7 +2830,7 @@ class TCPIServer(BaseIServer):
 
   CLASS = ISocketGenerator
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, request_queue_size=10, threaded=False, daemon_thread=False, nssl_context=None):
+  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.request_queue_size = request_queue_size
     self.nssl_context = nssl_context
     if self.nssl_context is True:
@@ -2833,7 +2854,7 @@ class TCPIServer(BaseIServer):
     self.isocket.listen(self.request_queue_size)
 
   def _get_request(self):
-    return self.isocket.accept(timeout=0)
+    return self.isocket.accept()
 
   def _handle_request(self, request, client_address):
     self.request_handler_class(request, client_address, self)
@@ -3534,7 +3555,7 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
 
 class WebSocketIDServer(TCPIDServer):
 
-  def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=100, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
+  def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=128, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
     super().__init__(server_address, WebSocketRequestHandler, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, nssl_context)
     self.address = server_address
     self.channels = {}
