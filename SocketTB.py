@@ -925,7 +925,7 @@ class IDSocketGenerator(ISocketGenerator):
     try:
       if r:
         return r
-      if self.events[event].wait(None if timeout is None else max(timeout)) and not self.closed:
+      if self.events[event].wait(timeout) and not self.closed:
         return tuple(idsock for idsock in idsocks if idsock.mode and idsock.events[event].is_set())
     finally:
       for idsock in idsocks:
