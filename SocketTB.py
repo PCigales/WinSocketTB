@@ -296,7 +296,6 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
-
   class PISocket:
 
     def __init__(self, s):
@@ -309,7 +308,6 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
 
     def __getattr__(self, name):
       return getattr(self.s, name)
-
 
   def accept(self, *args, timeout='', **kwargs):
     timeout, rt, ul = self.lock(timeout)
