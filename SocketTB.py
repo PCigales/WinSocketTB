@@ -57,6 +57,10 @@ LPVOID = ctypes.wintypes.LPVOID
 LPCVOID = ctypes.wintypes.LPCVOID
 POINTER = ctypes.POINTER
 STRUCTURE = ctypes.Structure
+WinError = ctypes.WinError
+ClosedError = lambda: WinError(10038)
+AlreadyError = lambda: WinError(10037)
+ConResetError = lambda: WinError(10054)
 
 class WSANETWORKEVENTS(STRUCTURE):
   _fields_ = [('lNetworkEvents', LONG), ('iErrorCode', INT*10)]
@@ -78,18 +82,6 @@ class CRYPT_INTEGER_BLOB(STRUCTURE):
 class CERT_CONTEXT(STRUCTURE):
   _fields_ = [('dwCertEncodingType', DWORD), ('pbCertEncoded', PVOID), ('cbCertEncoded', DWORD), ('pCertInfo', PVOID), ('hCertStore', HANDLE)]
 P_CERT_CONTEXT = POINTER(CERT_CONTEXT)
-
-
-def WinErrorMessage(errno):
-  m = LPCWSTR()
-  if kernel32.FormatMessageW(0x000011ff, 0, errno, 0, ctypes.byref(m), 0, 0):
-    return ctypes.wstring_at(m).rstrip(' .')
-  else:
-    return ''
-
-ClosedError = OSError(10038, WinErrorMessage(10038), None, 10038)
-AlreadyError = OSError(10037, WinErrorMessage(10037), None, 10037)
-ConResetError = OSError(10054, WinErrorMessage(10054), None, 10054)
 
 
 class ISocketMeta(type):
@@ -135,22 +127,22 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       timeout = self.sock_timeout
     if timeout is None:
       if self._lock.acquire():
-        return None, None
+        return timeout, None, None
       else:
-        raise ClosedError if self.closed else TimeoutError()
+        raise ClosedError() if self.closed else TimeoutError()
     else:
       t = time.monotonic()
       if self._lock.acquire(timeout=timeout):
-        return max(0, timeout + t - time.monotonic()), None
+        return timeout, max(0, timeout + t - time.monotonic()), None
       else:
-        raise ClosedError if self.closed else TimeoutError()
+        raise ClosedError() if self.closed else TimeoutError()
 
   def unlock(self, ul):
     self._lock.release()
 
   @property
   def mode(self):
-    rt, ul = self.lock(None)
+    ul = self.lock(None)[2]
     try:
       return self._mode if not self.closed else None
     finally:
@@ -174,7 +166,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self._set_mode(value)
 
   def unwrap(self, *, timeout=''):
-    rt, ul = self.lock(timeout)
+    ul = self.lock(timeout)[2]
     try:
       self.mode = None
       self.closed = True
@@ -189,19 +181,19 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     return sock
 
   def shutdown(self, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    ul = self.lock(timeout)[2]
     try:
       if not self.closed:
         socket.socket.shutdown(self, *args, **kwargs)
       else:
-        raise ClosedError
+        raise ClosedError()
     finally:
       self.unlock(ul)
 
   def _close(self):
     self.closed = True
     ws2.WSASetEvent(self.event)
-    rt, ul = self.lock(None)
+    ul = self.lock(None)[2]
     self.mode = None
     self.unlock(ul)
     self.sock_fileno = -1
@@ -261,10 +253,10 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       return True
 
   def _func_wrap(self, mode, func, f, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    timeout, rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       self.mode = mode
       ws2.WSAResetEvent(self.event)
       try:
@@ -277,7 +269,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           if len(args) > f and (args[f] & socket.MSG_PEEK):
             ws2.WSASetEvent(self.event)
           return func(self, *args, **kwargs)
-      raise ClosedError if self.closed else TimeoutError()
+      raise ClosedError() if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -298,39 +290,47 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           rt = timeout + t - time.monotonic()
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    timeout, rt, ul = self.lock(timeout)
     try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
     finally:
       self.unlock(ul)
 
+
+  class PISocket:
+
+    def __init__(self, s):
+      self.s = s
+
+    def gettimeout(self):
+      return None
+
+    timeout = None
+
+    def __getattr__(self, name):
+      return getattr(self.s, name)
+
+
   def accept(self, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    timeout, rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       self.mode = 'a'
       ws2.WSAResetEvent(self.event)
-      self.gettimeout = lambda : None
+      s = self.__class__.PISocket(self)
       a = None
       try:
-        a = socket.socket.accept(self, *args, **kwargs)
+        a = socket.socket.accept(s, *args, **kwargs)
       except BlockingIOError:
-        del self.gettimeout
         if timeout != 0 and self.wait(rt):
-          self.gettimeout = lambda : None
-          a = socket.socket.accept(self, *args, **kwargs)
-      finally:
-        try:
-          del self.gettimeout
-        except:
-          pass
+          a = socket.socket.accept(s, *args, **kwargs)
       if a is not None:
         isock = self.gen.wrap(a[0])
         isock.settimeout(self.timeout)
         isock.mode = 'r'
         return (isock, a[1])
-      raise ClosedError if self.closed else TimeoutError()
+      raise ClosedError() if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -349,13 +349,13 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     return rt
 
   def connect(self, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    timeout, rt, ul = self.lock(timeout)
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       rt = self._connect_pending(rt)
       if rt is True:
-        raise AlreadyError
+        raise AlreadyError()
       ws2.WSAResetEvent(self.event)
       try:
         socket.socket.connect(self, *args, **kwargs)
@@ -366,10 +366,9 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
           if self.wait(0):
             return
           else:
-            err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            raise OSError(err, WinErrorMessage(err), None, err)
+            raise WinError(self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR))
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       else:
         self._connect_pending = self._connect_pending_check
         raise TimeoutError()
@@ -377,7 +376,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
       self.unlock(ul)
 
   def connect_ex(self, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout)
+    timeout, rt, ul = self.lock(timeout)
     try:
       if self.closed:
         return 10038
@@ -657,17 +656,17 @@ class IDSocket(ISocket):
         if not a:
           a = self._condition.wait_for(pred)
         if a:
-          return None, (a_r, a_w)
+          return timeout, None, (a_r, a_w)
         else:
-          raise ClosedError if self.closed else TimeoutError()
+          raise ClosedError() if self.closed else TimeoutError()
       else:
         t = time.monotonic()
         if not a:
           a = self._condition.wait_for(pred, timeout)
         if a:
-          return timeout + t - time.monotonic(), (a_r, a_w)
+          return timeout, timeout + t - time.monotonic(), (a_r, a_w)
         else:
-          raise ClosedError if self.closed else TimeoutError()
+          raise ClosedError() if self.closed else TimeoutError()
 
   def unlock(self, ul):
     a_r, a_w = ul
@@ -735,15 +734,15 @@ class IDSocket(ISocket):
     if not self.mode:
       return False
     self._wevent.inc()
-    w = self.events[mode].wait(timeout)
+    w = self.events[mode].wait(None if timeout is None else max(timeout, 0.000001))
     self._wevent.dec()
-    return w and self.mode
+    return w and bool(self.mode)
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout, m)
+    timeout, rt, ul = self.lock(timeout, m)
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       end_time = None
       while True:
         try:
@@ -770,30 +769,30 @@ class IDSocket(ISocket):
         except:
           self.events[m].unclear()
           raise
-      raise ClosedError if self.closed else TimeoutError()
+      raise ClosedError() if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
   def sendall(self, bytes, *args, timeout='', **kwargs):
-    rt, ul = self.lock(timeout, 'w')
+    timeout, rt, ul = self.lock(timeout, 'w')
     try:
       self._sendall(bytes, *args, timeout=rt, **kwargs)
     finally:
       self.unlock(ul)
 
   def accept(self, timeout='', *args, **kwargs):
-    rt, ul = self.lock(timeout, 'a')
+    timeout, rt, ul = self.lock(timeout, 'a')
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       end_time = None
+      s = self.__class__.PISocket(self)
       a = None
       while True:
-        self.gettimeout = lambda : None
         try:
           with self._elock['a']:
             self.events['a'].clearf()
-            a = socket.socket.accept(self, *args, **kwargs)
+            a = socket.socket.accept(s, *args, **kwargs)
             break
         except BlockingIOError:
           if timeout == 0:
@@ -803,7 +802,6 @@ class IDSocket(ISocket):
               end_time = rt + time.monotonic()
             else:
               rt = end_time - time.monotonic()
-          del self.gettimeout
           if not self.wait(rt, 'a'):
             break
         except OSError as err:
@@ -813,16 +811,11 @@ class IDSocket(ISocket):
         except:
           self.events['a'].unclear()
           raise
-        finally:
-          try:
-            del self.gettimeout
-          except:
-            pass
       if a is not None:
         isock = self.gen.wrap(a[0])
         isock.settimeout(self.timeout)
         return (isock, a[1])
-      raise ClosedError if self.closed else TimeoutError()
+      raise ClosedError() if self.closed else TimeoutError()
     finally:
       self.unlock(ul)
 
@@ -839,13 +832,13 @@ class IDSocket(ISocket):
     return rt
 
   def connect(self, *args, timeout='', **kwargs):
-    rt, ul =  self.lock(timeout, 'c')
+    timeout, rt, ul =  self.lock(timeout, 'c')
     try:
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       rt = self._connect_pending(rt)
       if rt is True:
-        raise AlreadyError
+        raise AlreadyError()
       try:
         with self._elock['c']:
           self.events['c'].clearf()
@@ -856,7 +849,7 @@ class IDSocket(ISocket):
         if timeout != 0 and self.wait(rt, 'c'):
           err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
           if err:
-            raise OSError(err, WinErrorMessage(err), None, err)
+            raise WinError(err)
           else:
             return
       except OSError as err:
@@ -869,7 +862,7 @@ class IDSocket(ISocket):
         self.events['c'].unclear()
         raise
       if self.closed:
-        raise ClosedError
+        raise ClosedError()
       else:
         self._connect_pending = self._connect_pending_check
         raise TimeoutError()
@@ -877,7 +870,7 @@ class IDSocket(ISocket):
       self.unlock(ul)
 
   def connect_ex(self, *args, timeout='', **kwargs):
-    rt, ul =  self.lock(timeout, 'c')
+    timeout, rt, ul =  self.lock(timeout, 'c')
     try:
       if self.closed:
         return 10038
@@ -932,7 +925,7 @@ class IDSocketGenerator(ISocketGenerator):
     try:
       if r:
         return r
-      if self.events[event].wait(timeout) and not self.closed:
+      if self.events[event].wait(None if timeout is None else max(timeout)) and not self.closed:
         return tuple(idsock for idsock in idsocks if idsock.mode and idsock.events[event].is_set())
     finally:
       for idsock in idsocks:
@@ -959,14 +952,20 @@ class NestedSSLContext(ssl.SSLContext):
       self.sock_hto = getattr(self.socket.__class__, 'HAS_TIMEOUT', False)
       return self
 
+    class PSocket:
+
+      def __init__(self, s):
+        self.s = s
+
+      def detach(self):
+        pass
+
+      def __getattr__(self, name):
+        return getattr(self.s, name)
+
     @classmethod
     def _create(cls, sock, *args, **kwargs):
-      so = socket.socket(family=sock.family, type=sock.type, proto=sock.proto, fileno=sock.fileno())
-      try:
-        so.settimeout(sock.timeout)
-      except:
-        pass
-      self = ssl.SSLSocket._create.__func__(type('BoundSSLSocket', (cls,), {'sock': sock}), so, *args, **kwargs)
+      self = ssl.SSLSocket._create.__func__(type('BoundSSLSocket', (cls,), {'sock': sock}), cls.PSocket(sock), *args, **kwargs)
       return self
 
     def detach(self):
@@ -1262,7 +1261,7 @@ class NestedSSLContext(ssl.SSLContext):
             sock.settimeout(rt)
           b_ = sock.recv(5 - len(bl))
         if not b_:
-          raise ConResetError
+          raise ConResetError()
         bl += b_
       l = int.from_bytes(bl[3:5], 'big')
       self.inc.write(bl)
@@ -1281,7 +1280,7 @@ class NestedSSLContext(ssl.SSLContext):
             sock.settimeout(rt)
           b_ = sock.recv(l)
         if not b_:
-          raise ConResetError
+          raise ConResetError()
         l -= len(b_)
         self.inc.write(b_)
       return sto
@@ -1324,18 +1323,18 @@ class NestedSSLContext(ssl.SSLContext):
                       raise TimeoutError(10060, 'timed out')
                   if self.hto:
                     if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
-                      raise ConResetError
+                      raise ConResetError()
                   else:
                     if rt is not None and sto - rt > 0.005:
                       sto = rt
                       sock.settimeout(rt)
                     if not self.inc.write(sock.recv(self.read_ahead)):
-                      raise ConResetError
+                      raise ConResetError()
                 else:
                   sto = self._read_record(end_time, z, sto)
               except ConnectionResetError:
                 if action == self._sslobj.do_handshake:
-                  raise ConResetError
+                  raise ConResetError()
                 else:
                   raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
             z = -1
@@ -1440,12 +1439,12 @@ class NestedSSLContext(ssl.SSLContext):
                   if rt < 0:
                     raise TimeoutError(10060, 'timed out')
                 if not self.inc.write(sock.recv(self.read_ahead, timeout=rt)):
-                  raise ConResetError
+                  raise ConResetError()
               else:
                 sto = self._read_record(end_time, z, sto)
             except ConnectionResetError:
               if action == self._sslobj.do_handshake:
-                raise ConResetError
+                raise ConResetError()
               else:
                 raise ssl.SSLEOFError(ssl.SSL_ERROR_EOF, 'EOF occurred in violation of protocol')
             finally:
