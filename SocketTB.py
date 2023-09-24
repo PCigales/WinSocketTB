@@ -296,7 +296,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
-  class PISocket:
+  class _PISocket:
 
     def __init__(self, s):
       self.s = s
@@ -316,7 +316,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         raise ClosedError()
       self.mode = 'a'
       ws2.WSAResetEvent(self.event)
-      s = self.__class__.PISocket(self)
+      s = self.__class__._PISocket(self)
       a = None
       try:
         a = socket.socket.accept(s, *args, **kwargs)
@@ -534,7 +534,7 @@ class IDSocket(ISocket):
   MODES_M = {'r': 33, 'a': 8, 'w': 34, 'c': 16}
   IS_DUPLEX = True
 
-  class RevertibleEvent:
+  class _RevertibleEvent:
 
     __slots__ = ('_cond', '_flag', '_ex_flag')
 
@@ -593,7 +593,7 @@ class IDSocket(ISocket):
       with self._cond:
         return True if self._flag else self._cond.wait(timeout)
 
-  class CountedWSAEvent:
+  class _CountedWSAEvent:
 
     __slots__ = ('_event', '_lock', '_counter')
 
@@ -628,7 +628,7 @@ class IDSocket(ISocket):
     self._erlock = threading.RLock()
     self._ewlock = threading.RLock()
     self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock}
-    self.events = {m: self.__class__.RevertibleEvent(self._elock[m]) for m in ('r', 'a', 'w', 'c')}
+    self.events = {m: self.__class__._RevertibleEvent(self._elock[m]) for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
 
   def lock(self, timeout='', mode='u'):
@@ -724,7 +724,7 @@ class IDSocket(ISocket):
 
   def wait_start(self):
     self.mode = 'u'
-    self._wevent = self.__class__.CountedWSAEvent()
+    self._wevent = self.__class__._CountedWSAEvent()
     t = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
     t.start()
 
@@ -784,7 +784,7 @@ class IDSocket(ISocket):
       if self.closed:
         raise ClosedError()
       end_time = None
-      s = self.__class__.PISocket(self)
+      s = self.__class__._PISocket(self)
       a = None
       while True:
         try:
@@ -932,6 +932,89 @@ class IDSocketGenerator(ISocketGenerator):
     return ()
 
 
+class RSASelfSigned:
+
+  def __init__(self, name, years):
+    self.name = name
+    self.years = years
+    self.ready = threading.Event()
+
+  def generate(self):
+    pcbEncoded = DWORD(0)
+    wcrypt.CertStrToNameW(DWORD(1), LPCWSTR('CN=' + self.name), DWORD(2), None, None, byref(pcbEncoded), None)
+    pSubjectIssuerBlob = CRYPT_INTEGER_BLOB()
+    pSubjectIssuerBlob.cbData = DWORD(pcbEncoded.value)
+    pSubjectIssuerBlob.pbData = ctypes.cast(ctypes.create_string_buffer(pcbEncoded.value), PVOID)
+    wcrypt.CertStrToNameW(DWORD(1), LPCWSTR('CN=' + self.name), DWORD(2), None, PVOID(pSubjectIssuerBlob.pbData), byref(pcbEncoded), None)
+    phProvider = HANDLE(0)
+    ncrypt.NCryptOpenStorageProvider(byref(phProvider), LPCWSTR('Microsoft Software Key Storage Provider'), DWORD(0))
+    phKey = HANDLE(0)
+    ncrypt.NCryptCreatePersistedKey(phProvider, byref(phKey), LPCWSTR('RSA'), None, DWORD(1), DWORD(0))
+    ncrypt.NCryptSetProperty(phKey, LPCWSTR('Export Policy'), byref(ULONG(3)), 4, ULONG(0x80000000))
+    ncrypt.NCryptSetProperty(phKey, LPCWSTR('Length'), byref(DWORD(2048)), 4, ULONG(0x80000000))
+    ncrypt.NCryptFinalizeKey(phKey, DWORD(0x40))
+    pKeyProvInfo = CRYPT_KEY_PROV_INFO()
+    pKeyProvInfo.pwszContainerName = LPWSTR('CN=' + self.name)
+    pKeyProvInfo.pwszProvName = LPWSTR('Microsoft Software Key Storage Provider')
+    pKeyProvInfo.dwProvType = DWORD(0x01)
+    pKeyProvInfo.dwFlags = DWORD(0x40)
+    pKeyProvInfo.cProvParam = DWORD(0)
+    pKeyProvInfo.rgProvParam = PVOID(0)
+    pKeyProvInfo.dwKeySpec = DWORD(1)
+    pSignatureAlgorithm = None
+    pStartTime = P_SYSTEMTIME(SYSTEMTIME())
+    kernel32.GetSystemTime(pStartTime)
+    pEndTime = P_SYSTEMTIME(SYSTEMTIME())
+    ctypes.memmove(pEndTime, pStartTime, ctypes.sizeof(SYSTEMTIME))
+    pEndTime.contents.wYear += self.years
+    if pEndTime.contents.wMonth == 2 and pEndTime.contents.wDay == 29:
+      pEndTime.contents.wDay = 28
+    pExtensions = CERT_EXTENSIONS()
+    pExtensions.cExtension = 0
+    pExtensions.rgExtension = PVOID(0)
+    wcrypt.CertCreateSelfSignCertificate.restype = P_CERT_CONTEXT
+    pCertContext = wcrypt.CertCreateSelfSignCertificate(phKey, pSubjectIssuerBlob, DWORD(0), pKeyProvInfo, pSignatureAlgorithm, pStartTime, pEndTime, pExtensions)
+    self.cert = ctypes.string_at(pCertContext.contents.pbCertEncoded, pCertContext.contents.cbCertEncoded)
+    pcbResult = DWORD(0)
+    ncrypt.NCryptExportKey(phKey, None, LPCWSTR('PKCS8_PRIVATEKEY'), None, None, 0, byref(pcbResult), DWORD(0x40))
+    pbOutput = ctypes.create_string_buffer(pcbResult.value)
+    ncrypt.NCryptExportKey(phKey, None, LPCWSTR('PKCS8_PRIVATEKEY'), None, pbOutput, pcbResult, byref(pcbResult), DWORD(0x40))
+    self.key = bytes(pbOutput)
+    ncrypt.NCryptFreeObject(phProvider)
+    ncrypt.NCryptDeleteKey(phKey, DWORD(0x40))
+    wcrypt.CertFreeCertificateContext(pCertContext)
+
+  def get_PEM(self):
+    return ('-----BEGIN CERTIFICATE-----\r\n' + '\r\n'.join(textwrap.wrap(base64.b64encode(self.cert).decode('utf-8'), 64)) + '\r\n-----END CERTIFICATE-----\r\n', '-----BEGIN PRIVATE KEY-----\r\n' + '\r\n'.join(textwrap.wrap(base64.b64encode(self.key).decode('utf-8'), 64)) + '\r\n-----END PRIVATE KEY-----\r\n')
+
+  def _pipe_PEM(self, certname, keyname, number=1):
+    pipe_c = HANDLE(kernel32.CreateNamedPipeW(LPCWSTR('\\\\.\\pipe\\' + certname + ('.pem' if certname[:4].lower() != '.pem' else '')), DWORD(0x00000002), DWORD(0), DWORD(1), DWORD(0x100000), DWORD(0x100000), DWORD(0), HANDLE(0)))
+    pipe_k = HANDLE(kernel32.CreateNamedPipeW(LPCWSTR('\\\\.\\pipe\\' + keyname + ('.pem' if keyname[:4].lower() != '.pem' else '')), DWORD(0x00000002), DWORD(0), DWORD(1), DWORD(0x100000), DWORD(0x100000), DWORD(0), HANDLE(0)))
+    self.ready.set()
+    pem = tuple(t.encode('utf-8') for t in self.get_PEM())
+    n = DWORD(0)
+    for i in range(number):
+      for (p, v) in zip((pipe_c, pipe_k), pem):
+        kernel32.ConnectNamedPipe(p, LPVOID(0))
+        kernel32.WriteFile(p, ctypes.cast(v, LPCVOID), DWORD(len(v)), byref(n), LPVOID(0))
+        kernel32.FlushFileBuffers(p)
+        kernel32.DisconnectNamedPipe(p)
+    kernel32.CloseHandle(pipe_c)
+    kernel32.CloseHandle(pipe_k)
+
+  def pipe_PEM(self, certname, keyname, number=1):
+    pipe_thread = threading.Thread(target=self._pipe_PEM, args=(certname, keyname), kwargs={'number': number}, daemon=True)
+    pipe_thread.start()
+    self.ready.wait()
+
+  def __enter__(self):
+    self.generate()
+    return self
+
+  def __exit__(self, type, value, traceback):
+    pass
+
+
 class NestedSSLContext(ssl.SSLContext):
 
   class SSLSocket(ssl.SSLSocket):
@@ -950,7 +1033,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.sock_hto = getattr(self.socket.__class__, 'HAS_TIMEOUT', False)
       return self
 
-    class PSocket:
+    class _PSocket:
 
       def __init__(self, s):
         self.s = s
@@ -963,7 +1046,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     @classmethod
     def _create(cls, sock, *args, **kwargs):
-      self = ssl.SSLSocket._create.__func__(type('BoundSSLSocket', (cls,), {'sock': sock}), cls.PSocket(sock), *args, **kwargs)
+      self = ssl.SSLSocket._create.__func__(type('BoundSSLSocket', (cls,), {'sock': sock}), cls._PSocket(sock), *args, **kwargs)
       return self
 
     def detach(self):
@@ -1504,6 +1587,26 @@ class NestedSSLContext(ssl.SSLContext):
   def wrap_bio(self, *args, **kwargs):
     return self.DefaultSSLContext.wrap_bio(*args, **kwargs)
 
+  def load_pem_cert_chain(self, certpem, keypem=None, password=None):
+    cert = RSASelfSigned(None, None)
+    if not isinstance(certpem, str):
+      certpem = certpem.decode('utf-8')
+    if keypem is None:
+      keypem = certpem[:certpem.index('-----BEGIN CERTIFICATE-----')]
+      certpem = certpem[len(keypem):]
+    elif not isinstance(keypem, str):
+      keypem = keypem.decode('utf-8')
+    cert.get_PEM = lambda: (certpem, keypem)
+    cid = base64.b32encode(os.urandom(10)).decode('utf-8')
+    cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
+    self.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid, password)
+
+  def load_autogenerated_cert_chain(self):
+    cid = base64.b32encode(os.urandom(10)).decode('utf-8')
+    with RSASelfSigned('TCPIServer' + cid, 1) as cert:
+      cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
+      self.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
+
   _nestedSSLContext_set = {*locals(), '_encode_hostname', 'cert_store_stats', 'get_ca_certs', 'get_ciphers', 'session_stats'}
 
 
@@ -1955,7 +2058,7 @@ class HTTPMessage:
 
 class HTTPStreamMessage(HTTPMessage):
 
-  class brotli_decompressor:
+  class _BrotliDecompressor:
     def __init__(self):
       self.decompressor = brotli.Decompressor()
     def decompress(self, data):
@@ -2077,7 +2180,7 @@ class HTTPStreamMessage(HTTPMessage):
             elif dec == 'gzip':
               dec = hce[i] = zlib.decompressobj(wbits=31)
             elif dec == 'br':
-              dec = hce[i] = cls.brotli_decompressor()
+              dec = hce[i] = cls._BrotliDecompressor()
             else:
               raise
           return dec.decompress(data)
@@ -2602,90 +2705,9 @@ def HTTPRequestConstructor(socket_source=socket, proxy=None):
   return HTTPRequest
 
 
-class RSASelfSigned:
-
-  def __init__(self, name, years):
-    self.name = name
-    self.years = years
-    self.ready = threading.Event()
-
-  def generate(self):
-    pcbEncoded = DWORD(0)
-    wcrypt.CertStrToNameW(DWORD(1), LPCWSTR('CN=' + self.name), DWORD(2), None, None, byref(pcbEncoded), None)
-    pSubjectIssuerBlob = CRYPT_INTEGER_BLOB()
-    pSubjectIssuerBlob.cbData = DWORD(pcbEncoded.value)
-    pSubjectIssuerBlob.pbData = ctypes.cast(ctypes.create_string_buffer(pcbEncoded.value), PVOID)
-    wcrypt.CertStrToNameW(DWORD(1), LPCWSTR('CN=' + self.name), DWORD(2), None, PVOID(pSubjectIssuerBlob.pbData), byref(pcbEncoded), None)
-    phProvider = HANDLE(0)
-    ncrypt.NCryptOpenStorageProvider(byref(phProvider), LPCWSTR('Microsoft Software Key Storage Provider'), DWORD(0))
-    phKey = HANDLE(0)
-    ncrypt.NCryptCreatePersistedKey(phProvider, byref(phKey), LPCWSTR('RSA'), None, DWORD(1), DWORD(0))
-    ncrypt.NCryptSetProperty(phKey, LPCWSTR('Export Policy'), byref(ULONG(3)), 4, ULONG(0x80000000))
-    ncrypt.NCryptSetProperty(phKey, LPCWSTR('Length'), byref(DWORD(2048)), 4, ULONG(0x80000000))
-    ncrypt.NCryptFinalizeKey(phKey, DWORD(0x40))
-    pKeyProvInfo = CRYPT_KEY_PROV_INFO()
-    pKeyProvInfo.pwszContainerName = LPWSTR('CN=' + self.name)
-    pKeyProvInfo.pwszProvName = LPWSTR('Microsoft Software Key Storage Provider')
-    pKeyProvInfo.dwProvType = DWORD(0x01)
-    pKeyProvInfo.dwFlags = DWORD(0x40)
-    pKeyProvInfo.cProvParam = DWORD(0)
-    pKeyProvInfo.rgProvParam = PVOID(0)
-    pKeyProvInfo.dwKeySpec = DWORD(1)
-    pSignatureAlgorithm = None
-    pStartTime = P_SYSTEMTIME(SYSTEMTIME())
-    kernel32.GetSystemTime(pStartTime)
-    pEndTime = P_SYSTEMTIME(SYSTEMTIME())
-    ctypes.memmove(pEndTime, pStartTime, ctypes.sizeof(SYSTEMTIME))
-    pEndTime.contents.wYear += self.years
-    if pEndTime.contents.wMonth == 2 and pEndTime.contents.wDay == 29:
-      pEndTime.contents.wDay = 28
-    pExtensions = CERT_EXTENSIONS()
-    pExtensions.cExtension = 0
-    pExtensions.rgExtension = PVOID(0)
-    wcrypt.CertCreateSelfSignCertificate.restype = P_CERT_CONTEXT
-    pCertContext = wcrypt.CertCreateSelfSignCertificate(phKey, pSubjectIssuerBlob, DWORD(0), pKeyProvInfo, pSignatureAlgorithm, pStartTime, pEndTime, pExtensions)
-    self.cert = ctypes.string_at(pCertContext.contents.pbCertEncoded, pCertContext.contents.cbCertEncoded)
-    pcbResult = DWORD(0)
-    ncrypt.NCryptExportKey(phKey, None, LPCWSTR('PKCS8_PRIVATEKEY'), None, None, 0, byref(pcbResult), DWORD(0x40))
-    pbOutput = ctypes.create_string_buffer(pcbResult.value)
-    ncrypt.NCryptExportKey(phKey, None, LPCWSTR('PKCS8_PRIVATEKEY'), None, pbOutput, pcbResult, byref(pcbResult), DWORD(0x40))
-    self.key = bytes(pbOutput)
-    ncrypt.NCryptFreeObject(phProvider)
-    ncrypt.NCryptDeleteKey(phKey, DWORD(0x40))
-    wcrypt.CertFreeCertificateContext(pCertContext)
-
-  def get_PEM(self):
-    return ('-----BEGIN CERTIFICATE-----\r\n' + '\r\n'.join(textwrap.wrap(base64.b64encode(self.cert).decode('utf-8'), 64)) + '\r\n-----END CERTIFICATE-----\r\n', '-----BEGIN PRIVATE KEY-----\r\n' + '\r\n'.join(textwrap.wrap(base64.b64encode(self.key).decode('utf-8'), 64)) + '\r\n-----END PRIVATE KEY-----\r\n')
-
-  def _pipe_PEM(self, certname, keyname, number=1):
-    pipe_c = HANDLE(kernel32.CreateNamedPipeW(LPCWSTR('\\\\.\\pipe\\' + certname + ('.pem' if certname[:4].lower() != '.pem' else '')), DWORD(0x00000002), DWORD(0), DWORD(1), DWORD(0x100000), DWORD(0x100000), DWORD(0), HANDLE(0)))
-    pipe_k = HANDLE(kernel32.CreateNamedPipeW(LPCWSTR('\\\\.\\pipe\\' + keyname + ('.pem' if keyname[:4].lower() != '.pem' else '')), DWORD(0x00000002), DWORD(0), DWORD(1), DWORD(0x100000), DWORD(0x100000), DWORD(0), HANDLE(0)))
-    self.ready.set()
-    pem = tuple(t.encode('utf-8') for t in self.get_PEM())
-    n = DWORD(0)
-    for i in range(number):
-      for (p, v) in zip((pipe_c, pipe_k), pem):
-        kernel32.ConnectNamedPipe(p, LPVOID(0))
-        kernel32.WriteFile(p, ctypes.cast(v, LPCVOID), DWORD(len(v)), byref(n), LPVOID(0))
-        kernel32.FlushFileBuffers(p)
-        kernel32.DisconnectNamedPipe(p)
-    kernel32.CloseHandle(pipe_c)
-    kernel32.CloseHandle(pipe_k)
-
-  def pipe_PEM(self, certname, keyname, number=1):
-    pipe_thread = threading.Thread(target=self._pipe_PEM, args=(certname, keyname), kwargs={'number': number}, daemon=True)
-    pipe_thread.start()
-    self.ready.wait()
-
-  def __enter__(self):
-    self.generate()
-    return self
-
-  def __exit__(self, type, value, traceback):
-    pass
-
-
 class BaseIServer:
+
+  CLASS = ISocketGenerator
 
   def __new__(cls, *args, **kwargs):
     if cls is BaseIServer:
@@ -2790,8 +2812,6 @@ class MixinIDServer:
 
 class UDPIServer(BaseIServer):
 
-  CLASS = ISocketGenerator
-
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
     self.max_packet_size = max_packet_size
     self.multicast_membership = multicast_membership
@@ -2825,17 +2845,12 @@ class UDPIDServer(MixinIDServer, UDPIServer):
 
 class TCPIServer(BaseIServer):
 
-  CLASS = ISocketGenerator
-
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.request_queue_size = request_queue_size
     self.nssl_context = nssl_context
     if self.nssl_context is True:
-      cid = base64.b32encode(os.urandom(10)).decode('utf-8')
       self.nssl_context = NestedSSLContext(ssl.PROTOCOL_TLS_SERVER)
-      with RSASelfSigned('TCPIServer' + cid, 1) as cert:
-        cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
-        self.nssl_context.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
+      self.nssl_context.load_autogenerated_cert_chain()
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
@@ -2889,8 +2904,6 @@ class RequestHandler:
 
 
 class MultiUDPIServer(UDPIServer):
-
-  CLASS = ISocketGenerator
 
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
     if isinstance(server_address, int):
