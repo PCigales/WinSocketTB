@@ -595,12 +595,13 @@ class IDSocket(ISocket):
 
   class _CountedWSAEvent:
 
-    __slots__ = ('_event', '_lock', '_counter')
+    __slots__ = ('_event', '_lock', '_counter', '_closed')
 
     def __init__(self):
       self._counter = 0
       self._lock = threading.Lock()
       self._event = WSAEVENT(ws2.WSACreateEvent())
+      self._closed = False
 
     def inc(self):
       with self._lock:
@@ -615,6 +616,11 @@ class IDSocket(ISocket):
           ws2.WSAResetEvent(self._event)
 
     def close(self):
+      with self._lock:
+        if not self._closed:
+          self._closed = True
+        else:
+          return
       ws2.WSACloseEvent(self._event)
 
     def __del__(self):
@@ -680,7 +686,10 @@ class IDSocket(ISocket):
       self._condition.notify_all()
 
   def _close(self):
-    self._wevent.inc()
+    try:
+      self._wevent.inc()
+    except:
+      pass
     super()._close()
 
   @staticmethod
