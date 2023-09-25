@@ -111,6 +111,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
   HAS_TIMEOUT = True
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
+    self.closed = True
     socket.socket.__init__(self, family, type, proto, fileno)
     self.gen = gen
     self.sock_fileno = socket.socket.fileno(self)
@@ -190,8 +191,14 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     finally:
       self.unlock(ul)
 
-  def _close(self):
-    self.closed = True
+  def _close(self, deletion=False):
+    if deletion:
+      self.closed = True
+    else:
+      with self.gen.lock:
+        if self.closed:
+          return
+        self.closed = True
     ws2.WSASetEvent(self.event)
     ul = self.lock(None)[2]
     self.mode = None
@@ -224,7 +231,17 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     self.shutclose()
 
   def __del__(self):
-    self.shutclose()
+    if self.closed:
+      return
+    self._close(deletion=True)
+    try:
+      socket.socket.shutdown(self, socket.SHUT_RDWR)
+    except:
+      pass
+    try:
+      socket.socket.close(self)
+    except:
+      pass
     super().__del__()
 
   def gettimeout(self):
@@ -685,12 +702,21 @@ class IDSocket(ISocket):
           self._queue_w.popleft()
       self._condition.notify_all()
 
-  def _close(self):
-    try:
-      self._wevent.inc()
-    except:
-      pass
-    super()._close()
+  def _close(self, deletion=False):
+    if deletion:
+      self.closed = True
+    else:
+      with self.gen.lock:
+        if self.closed:
+          return
+        self.closed = True
+    self._wevent.inc()
+    ws2.WSASetEvent(self.event)
+    self.wthread.join()
+    ul = self.lock(None)[2]
+    self.mode = None
+    self.unlock(ul)
+    self.sock_fileno = -1
 
   @staticmethod
   def _wait(ref):
@@ -734,8 +760,8 @@ class IDSocket(ISocket):
   def wait_start(self):
     self.mode = 'u'
     self._wevent = self.__class__._CountedWSAEvent()
-    t = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
-    t.start()
+    self.wthread = threading.Thread(target=self.__class__._wait, args=(weakref.getweakrefs(self)[0],), daemon=True)
+    self.wthread.start()
 
   def wait(self, timeout, mode):
     if not self.mode:
