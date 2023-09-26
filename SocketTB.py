@@ -1120,7 +1120,8 @@ class NestedSSLContext(ssl.SSLContext):
 
     def shutclose(self):
       try:
-        self._sslobj._close()
+        if self._sslobj:
+          self._sslobj._close()
       except:
         pass
       try:
