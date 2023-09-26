@@ -1120,7 +1120,7 @@ class NestedSSLContext(ssl.SSLContext):
 
     def shutclose(self):
       try:
-        self.recv(1, timeout=0)
+        self._sslobj._close()
       except:
         pass
       try:
@@ -1335,11 +1335,14 @@ class NestedSSLContext(ssl.SSLContext):
 
   sslsocket_class = SSLSocket
   ssl_read_ahead = 16384 + 2048
+  tls_1_3_tickets_workaround = True
 
   class _SSLSocket():
 
     def __init__(self, context, ssl_sock, server_side, server_hostname):
       self.read_ahead = context.ssl_read_ahead
+      self.tickets_workaround = context.tls_1_3_tickets_workaround
+      self.read_tickets = False
       self._sslsocket = weakref.ref(ssl_sock)
       self.hto = ssl_sock.sock_hto
       self.inc = ssl.MemoryBIO()
@@ -1354,7 +1357,7 @@ class NestedSSLContext(ssl.SSLContext):
       return self._sslobj.__getattribute__(name)
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'hto'):
+      if name in {'_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'tickets_workaround', 'read_tickets', 'hto'}:
         object.__setattr__(self, name, value)
       else:
         self._sslobj.__setattr__(name, value)
@@ -1473,7 +1476,25 @@ class NestedSSLContext(ssl.SSLContext):
           sock.settimeout(isto)
 
     def do_handshake(self, timeout=''):
-      return self.interface(self._sslobj.do_handshake, timeout=timeout)
+      r = self.interface(self._sslobj.do_handshake, timeout=timeout)
+      try:
+        v = self.version()
+        if self.tickets_workaround and not self.server_side and v.startswith('TLS') and float(v.rpartition('v')[2]) >= 1.3:
+          self.read_tickets = True
+          object.__setattr__(self, 'read', self._read_first)
+      except:
+        pass
+      return r
+
+    def _close(self):
+      if self.read_tickets:
+        self.read(1, timeout=0)
+
+    def _read_first(self, length=16384, buffer=None, timeout=''):
+      if length > 0:
+        del self.read
+        self.read_tickets = False
+      return self.__class__.read(self, length, buffer, timeout)
 
     def read(self, length=16384, buffer=None, timeout=''):
       return self.interface(self._sslobj.read, length, timeout=timeout) if buffer is None else self.interface(self._sslobj.read, length, buffer, timeout=timeout)
@@ -1497,7 +1518,7 @@ class NestedSSLContext(ssl.SSLContext):
       self.wlock = threading.Lock()
 
     def __setattr__(self, name, value):
-      if name in ('_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'hto', 'wlock', 'rcondition', 'rcounter'):
+      if name in {'_sslsocket', 'inc', 'out', '_sslobj', 'read_ahead', 'tickets_workaround', 'read_tickets', 'hto', 'wlock', 'rcondition', 'rcounter'}:
         object.__setattr__(self, name, value)
       else:
         self._sslobj.__setattr__(name, value)
