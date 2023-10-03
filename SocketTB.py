@@ -2528,7 +2528,7 @@ class HTTPBaseRequest:
       if hexp:
         headers['Expect'] = '100-continue'
       if not 'accept-encoding' in (k.lower() for k, v in hitems):
-        headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip')if decompress else 'identity'
+        headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip') if decompress else 'identity'
       if data is not None:
         if not 'chunked' in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
           headers['Content-Length'] = str(len(data))
@@ -2651,7 +2651,7 @@ class HTTPBaseRequest:
                 method = 'GET'
               data = None
               for k in list(headers.keys()):
-                if k.lower() in ('transfer-encoding', 'content-length', 'content-type'):
+                if k.lower() in ('transfer-encoding', 'content-length', 'content-type', 'expect'):
                   del headers[k]
           else:
             raise
