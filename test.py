@@ -6,7 +6,7 @@ import os
 import threading
 import time
 
-with IDSocketGenerator() as IGen:
+with ISocketGenerator() as IGen:
   ISock0 = IGen(family=socket.AF_INET, type=socket.SOCK_STREAM)
   sock2 = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
   ISock2 = IGen(sock2)
