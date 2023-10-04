@@ -143,11 +143,7 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
 
   @property
   def mode(self):
-    ul = self.lock(None)[2]
-    try:
-      return self._mode if not self.closed else None
-    finally:
-      self.unlock(ul)
+    return self._mode if not self.closed else None
 
   def _set_mode(self, value):
     if self.closed and value is not None:
