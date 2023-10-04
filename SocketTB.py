@@ -1,4 +1,4 @@
-# SocketTB v1.2.0 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.2.1 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -326,28 +326,15 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
     def __getattr__(self, name):
       return getattr(self.s, name)
 
+    def accept_wrap(self, s, *args, **kwargs):
+      return socket.socket.accept(self, *args, **kwargs)
+
   def accept(self, *args, timeout='', **kwargs):
-    timeout, rt, ul = self.lock(timeout)
-    try:
-      if self.closed:
-        raise ClosedError()
-      self.mode = 'a'
-      ws2.WSAResetEvent(self.event)
-      s = self.__class__._PISocket(self)
-      a = None
-      try:
-        a = socket.socket.accept(s, *args, **kwargs)
-      except BlockingIOError:
-        if timeout != 0 and self.wait(rt):
-          a = socket.socket.accept(s, *args, **kwargs)
-      if a is not None:
-        isock = self.gen.wrap(a[0])
-        isock.settimeout(self.timeout)
-        isock.mode = 'r'
-        return (isock, a[1])
-      raise ClosedError() if self.closed else TimeoutError()
-    finally:
-      self.unlock(ul)
+    a = self._func_wrap('a', self.__class__._PISocket(self).accept_wrap, float('inf'), *args, timeout=timeout, **kwargs)
+    isock = self.gen.wrap(a[0])
+    isock.settimeout(self.timeout)
+    isock.mode = 'r'
+    return (isock, a[1])
 
   def _connect_pending_check(self, rt):
     self._set_mode('c')
@@ -490,12 +477,7 @@ class ISocketGenerator:
   def close(self):
     with self.lock:
       self.closed = True
-    fi = True
     for isock, activ in self.isockets.items():
-      if fi:
-        for isock_ in self.isockets:
-          isock_.closed = True
-        fi = False
       if activ:
         isock.shutclose()
 
@@ -813,44 +795,11 @@ class IDSocket(ISocket):
     finally:
       self.unlock(ul)
 
-  def accept(self, timeout='', *args, **kwargs):
-    timeout, rt, ul = self.lock(timeout, 'a')
-    try:
-      if self.closed:
-        raise ClosedError()
-      end_time = None
-      s = self.__class__._PISocket(self)
-      a = None
-      while True:
-        try:
-          with self._elock['a']:
-            self.events['a'].clearf()
-            a = socket.socket.accept(s, *args, **kwargs)
-            break
-        except BlockingIOError:
-          if timeout == 0:
-            break
-          if rt is not None:
-            if end_time is None:
-              end_time = rt + time.monotonic()
-            else:
-              rt = end_time - time.monotonic()
-          if not self.wait(rt, 'a'):
-            break
-        except OSError as err:
-          if err.winerror is None:
-            self.events['a'].unclear()
-          raise
-        except:
-          self.events['a'].unclear()
-          raise
-      if a is not None:
-        isock = self.gen.wrap(a[0])
-        isock.settimeout(self.timeout)
-        return (isock, a[1])
-      raise ClosedError() if self.closed else TimeoutError()
-    finally:
-      self.unlock(ul)
+  def accept(self, *args, timeout='', **kwargs):
+    a = self._func_wrap('a', self.__class__._PISocket(self).accept_wrap, float('inf'), *args, timeout=timeout, **kwargs)
+    isock = self.gen.wrap(a[0])
+    isock.settimeout(self.timeout)
+    return (isock, a[1])
 
   def _connect_pending_check(self, rt):
     if rt is not None:

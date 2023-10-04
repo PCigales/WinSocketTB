@@ -6,7 +6,7 @@ import os
 import threading
 import time
 
-with ISocketGenerator() as IGen:
+with IDSocketGenerator() as IGen:
   ISock0 = IGen(family=socket.AF_INET, type=socket.SOCK_STREAM)
   sock2 = socket.socket(family=socket.AF_INET, type=socket.SOCK_STREAM)
   ISock2 = IGen(sock2)
@@ -24,8 +24,11 @@ with ISocketGenerator() as IGen:
   def r(n):
     try:
       ISock1.recv(n)
-    except InterruptedError:
-      print('interrupted')
+    except OSError as err:
+      if err.winerror == 10038:
+        print('interrupted')
+      else:
+        raise
   t = threading.Thread(target=r, args=(10, ))
   t.start()
   time.sleep(2)
@@ -33,8 +36,11 @@ with ISocketGenerator() as IGen:
   def a():
     try:
       ISock1 = ISock0.accept()[0]
-    except InterruptedError:
-      print('interrupted')
+    except OSError as err:
+      if err.winerror == 10038:
+        print('interrupted')
+      else:
+        raise
   t = threading.Thread(target=a)
   t.start()
   time.sleep(2)
@@ -55,13 +61,19 @@ with IDSocketGenerator() as IDGen:
   def r1(n):
     try:
       IDSock1.recv(n)
-    except InterruptedError:
-      print('interrupted1')
+    except OSError as err:
+      if err.winerror == 10038:
+        print('interrupted1')
+      else:
+        raise
   def r2(n):
     try:
       IDSock2.recv(n)
-    except InterruptedError:
-      print('interrupted2')
+    except OSError as err:
+      if err.winerror == 10038:
+        print('interrupted2')
+      else:
+        raise
   t1 = threading.Thread(target=r1, args=(10, ))
   t2 = threading.Thread(target=r2, args=(10, ))
   t1.start()
