@@ -865,7 +865,10 @@ class IDSocket(ISocket):
           r = socket.socket.connect_ex(self, *args, **kwargs)
         if r == 10035:
           raise BlockingIOError()
-        if r != 10056:
+        if r == 10056:
+          self.events['c'].unclear()
+          self.events['w'].unclear()
+        else:
           self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
