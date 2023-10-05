@@ -389,7 +389,8 @@ class ISocket(socket.socket, metaclass=ISocketMeta):
         return r
       except BlockingIOError:
         if timeout != 0 and self.wait(rt):
-          return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+          self.mode = 'w'
+          return 0 if self.wait(0) else self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
       if self.closed:
         return 10038
       else:
@@ -820,24 +821,26 @@ class IDSocket(ISocket):
       try:
         with self._elock['c']:
           self.events['c'].clearf()
+          self.events['w'].clearf()
           socket.socket.connect(self, *args, **kwargs)
         self._connect_pending = self._connect_pending_check
         return
       except BlockingIOError:
         if timeout != 0 and self.wait(rt, 'c'):
-          err = self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-          if err:
-            raise WinError(err)
+          if not self.events['w'].is_set():
+            raise WinError(self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR))
           else:
             return
       except OSError as err:
-        if err.winerror is None:
+        if err.winerror is None or err.winerror == 10056:
           self.events['c'].unclear()
+          self.events['w'].unclear()
         else:
           self._connect_pending = self._connect_pending_check
         raise
       except:
         self.events['c'].unclear()
+        self.events['w'].unclear()
         raise
       if self.closed:
         raise ClosedError()
@@ -858,16 +861,19 @@ class IDSocket(ISocket):
       try:
         with self._elock['c']:
           self.events['c'].clearf()
+          self.events['w'].clearf()
           r = socket.socket.connect_ex(self, *args, **kwargs)
         if r == 10035:
           raise BlockingIOError()
-        self._connect_pending = self._connect_pending_check
+        if r != 10056:
+          self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
         if timeout != 0 and self.wait(rt, 'c'):
-          return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+          return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) if not self.events['w'].is_set() else 0
       except:
         self.events['c'].unclear()
+        self.events['w'].unclear()
         raise
       if self.closed:
         return 10038
