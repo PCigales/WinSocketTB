@@ -823,7 +823,6 @@ class IDSocket(ISocket):
           self.events['c'].clearf()
           self.events['w'].clearf()
           socket.socket.connect(self, *args, **kwargs)
-        self._connect_pending = self._connect_pending_check
         return
       except BlockingIOError:
         if timeout != 0 and self.wait(rt, 'c'):
@@ -868,8 +867,6 @@ class IDSocket(ISocket):
         if r == 10056:
           self.events['c'].unclear()
           self.events['w'].unclear()
-        else:
-          self._connect_pending = self._connect_pending_check
         return r
       except BlockingIOError:
         if timeout != 0 and self.wait(rt, 'c'):
