@@ -11,10 +11,13 @@ from collections import deque
 import time
 import datetime
 import types
-from functools import reduce
+from functools import reduce, cmp_to_key
 import urllib.parse
 import email.utils
-from io import BytesIO
+import html
+import mimetypes
+import unicodedata
+from io import IOBase, BytesIO
 import math
 import base64
 import hmac
@@ -30,23 +33,24 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'TCPIServer', 'TCPIDServer', 'RequestHandler', 'MultiUDPIServer', 'MultiUDPIDServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
+__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
 wcrypt = ctypes.WinDLL('crypt32', use_last_error=True)
 ncrypt = ctypes.WinDLL('ncrypt', use_last_error=True)
 kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
+shlwapi = ctypes.WinDLL('shlwapi', use_last_error=True)
 byref = ctypes.byref
-INT = ctypes.c_int
-UINT = ctypes.c_uint
-LONG = ctypes.c_long
-ULONG = ctypes.c_ulong
+INT = ctypes.wintypes.INT
+UINT = ctypes.wintypes.UINT
+LONG = ctypes.wintypes.LONG
+ULONG = ctypes.wintypes.ULONG
 WORD = ctypes.wintypes.WORD
 USHORT = ctypes.wintypes.USHORT
 DWORD = ctypes.wintypes.DWORD
 ULONG = ctypes.wintypes.ULONG
-BOOL = ctypes.c_bool
+BOOL = ctypes.wintypes.BOOL
 PVOID = ctypes.c_void_p
 SOCKET  = PVOID
 WSAEVENT = PVOID
@@ -84,7 +88,7 @@ class CERT_CONTEXT(STRUCTURE):
 P_CERT_CONTEXT = POINTER(CERT_CONTEXT)
 
 
-class ISocketMeta(type):
+class _ISocketMeta(type):
 
   def func_wrap(cls, mode, func, f):
     def w(self, *args, timeout='', **kwargs):
@@ -105,7 +109,7 @@ class ISocketMeta(type):
       setattr(cls, name, attribute_error)
 
 
-class ISocket(socket.socket, metaclass=ISocketMeta):
+class ISocket(socket.socket, metaclass=_ISocketMeta):
 
   MODES = {'r': LONG(33), 'a': LONG(8), 'w': LONG(34), 'c': LONG(16)}
   HAS_TIMEOUT = True
@@ -524,11 +528,84 @@ class ISocketGenerator:
     return ISocket.waitmult(timeout, *(isock for isock, activ in self.isockets.items() if activ), event=event, reset_event=False)
 
 
-class IDSocket(ISocket):
+class _BIDSocket(ISocket):
 
   MODES = {'u': LONG(59)}
   MODES_M = {'r': 33, 'a': 8, 'w': 34, 'c': 16}
   IS_DUPLEX = True
+
+  def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
+    super().__init__(gen, family, type, proto, fileno, timeout)
+    self._condition = threading.Condition(self._lock)
+    self._queue_r = deque()
+    self._queue_w = deque()
+
+  def lock(self, timeout='', mode='u'):
+    th = threading.current_thread()
+    if mode == 'r':
+      pred = lambda : self._queue_r[0][0] == th
+    elif mode == 'w':
+      pred = lambda : self._queue_w[0][0] == th
+    else:
+      pred = lambda : self._queue_r[0][0] == th and self._queue_w[0][0] == th
+    if timeout == '':
+      timeout = self.sock_timeout
+    a_r = a_w = None
+    with self._condition:
+      if mode != 'w':
+        a_r = [th]
+        self._queue_r.append(a_r)
+      if mode != 'r':
+        a_w = [th]
+        self._queue_w.append(a_w)
+      a = pred()
+      if timeout is None:
+        if not a:
+          a = self._condition.wait_for(pred)
+        if a:
+          return timeout, None, (a_r, a_w)
+        else:
+          raise ClosedError() if self.closed else TimeoutError()
+      else:
+        t = time.monotonic()
+        if not a:
+          a = self._condition.wait_for(pred, timeout)
+        if a:
+          return timeout, timeout + t - time.monotonic(), (a_r, a_w)
+        else:
+          raise ClosedError() if self.closed else TimeoutError()
+
+  def unlock(self, ul):
+    a_r, a_w = ul
+    with self._condition:
+      if a_r is not None:
+        a_r[0] = None
+        while self._queue_r and self._queue_r[0][0] is None:
+          self._queue_r.popleft()
+      if a_w is not None:
+        a_w[0] = None
+        while self._queue_w and self._queue_w[0][0] is None:
+          self._queue_w.popleft()
+      self._condition.notify_all()
+
+  def accept(self, *args, timeout='', **kwargs):
+    a = self._func_wrap('a', self.__class__._PISocket(self).accept_wrap, float('inf'), *args, timeout=timeout, **kwargs)
+    isock = self.gen.wrap(a[0])
+    isock.settimeout(self.timeout)
+    return (isock, a[1])
+
+  def sendall(self, bytes, *args, timeout='', **kwargs):
+    timeout, rt, ul = self.lock(timeout, 'w')
+    try:
+      self._sendall(bytes, *args, timeout=rt, **kwargs)
+    finally:
+      self.unlock(ul)
+
+  def _connect_pending(self, rt):
+    return rt
+
+
+class IDSocket(_BIDSocket):
 
   class _RevertibleEvent:
 
@@ -624,62 +701,11 @@ class IDSocket(ISocket):
 
   def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
     super().__init__(gen, family, type, proto, fileno, timeout)
-    self._condition = threading.Condition(self._lock)
-    self._queue_r = deque()
-    self._queue_w = deque()
     self._erlock = threading.RLock()
     self._ewlock = threading.RLock()
     self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock}
     self.events = {m: self.__class__._RevertibleEvent(self._elock[m]) for m in ('r', 'a', 'w', 'c')}
     self.wait_start()
-
-  def lock(self, timeout='', mode='u'):
-    th = threading.current_thread()
-    if mode == 'r':
-      pred = lambda : self._queue_r[0][0] == th
-    elif mode == 'w':
-      pred = lambda : self._queue_w[0][0] == th
-    else:
-      pred = lambda : self._queue_r[0][0] == th and self._queue_w[0][0] == th
-    if timeout == '':
-      timeout = self.sock_timeout
-    a_r = a_w = None
-    with self._condition:
-      if mode != 'w':
-        a_r = [th]
-        self._queue_r.append(a_r)
-      if mode != 'r':
-        a_w = [th]
-        self._queue_w.append(a_w)
-      a = pred()
-      if timeout is None:
-        if not a:
-          a = self._condition.wait_for(pred)
-        if a:
-          return timeout, None, (a_r, a_w)
-        else:
-          raise ClosedError() if self.closed else TimeoutError()
-      else:
-        t = time.monotonic()
-        if not a:
-          a = self._condition.wait_for(pred, timeout)
-        if a:
-          return timeout, timeout + t - time.monotonic(), (a_r, a_w)
-        else:
-          raise ClosedError() if self.closed else TimeoutError()
-
-  def unlock(self, ul):
-    a_r, a_w = ul
-    with self._condition:
-      if a_r is not None:
-        a_r[0] = None
-        while self._queue_r and self._queue_r[0][0] is None:
-          self._queue_r.popleft()
-      if a_w is not None:
-        a_w[0] = None
-        while self._queue_w and self._queue_w[0][0] is None:
-          self._queue_w.popleft()
-      self._condition.notify_all()
 
   def _close(self, deletion=False):
     if deletion:
@@ -785,19 +811,6 @@ class IDSocket(ISocket):
     finally:
       self.unlock(ul)
 
-  def sendall(self, bytes, *args, timeout='', **kwargs):
-    timeout, rt, ul = self.lock(timeout, 'w')
-    try:
-      self._sendall(bytes, *args, timeout=rt, **kwargs)
-    finally:
-      self.unlock(ul)
-
-  def accept(self, *args, timeout='', **kwargs):
-    a = self._func_wrap('a', self.__class__._PISocket(self).accept_wrap, float('inf'), *args, timeout=timeout, **kwargs)
-    isock = self.gen.wrap(a[0])
-    isock.settimeout(self.timeout)
-    return (isock, a[1])
-
   def _connect_pending_check(self, rt):
     if rt is not None:
       end_time = rt + time.monotonic()
@@ -806,9 +819,6 @@ class IDSocket(ISocket):
       return None if rt is None else max(end_time - time.monotonic(), 0)
     else:
       return True
-
-  def _connect_pending(self, rt):
-    return rt
 
   def connect(self, *args, timeout='', **kwargs):
     timeout, rt, ul =  self.lock(timeout, 'c')
@@ -888,6 +898,203 @@ class IDSocket(ISocket):
     raise NotImplementedError()
 
 
+class IDAltSocket(_BIDSocket):
+
+  def __init__(self, gen, family=-1, type=-1, proto=-1, fileno=None, timeout=''):
+    super().__init__(gen, family, type, proto, fileno, timeout)
+    self._erlock = threading.Lock()
+    self._ewlock = threading.Lock()
+    self._elock = {'r': self._erlock, 'a': self._erlock, 'w': self._ewlock, 'c': self._ewlock}
+    self.events = {m: False for m in ('r', 'a', 'w', 'c')}
+    self._network_events = WSANETWORKEVENTS()
+    self.mode = 'u'
+
+  def wait(self, end_time, mode, rt=None):
+    rem_time = -1 if end_time is None else (int(((end_time - time.monotonic()) if rt is None else rt) * 1000))
+    while True:
+      if not self.mode or (end_time is not None and rem_time < 0):
+        return False
+      if ws2.WSAWaitForMultipleEvents(ULONG(1), byref(self.event), BOOL(False), ULONG(rem_time), BOOL(False)) == 258 or not self.mode:
+        return False
+      if self._elock[mode] == self._ewlock:
+        self._ewlock.release()
+        self._erlock.acquire()
+      self._ewlock.acquire()
+      if not ws2.WSAWaitForMultipleEvents(ULONG(1), byref(self.event), BOOL(False), ULONG(0), BOOL(False)):
+        if ws2.WSAEnumNetworkEvents(SOCKET(self.sock_fileno), self.event, byref(self._network_events)):
+          ws2.WSAResetEvent(self.event)
+        else:
+          for m in ('r', 'a', 'w', 'c'):
+            if self._network_events.lNetworkEvents & self.MODES_M[m]:
+              self.events[m] = True
+      self._erlock.release()
+      self._ewlock.release()
+      self._elock[mode].acquire()
+      if not self.mode:
+        ws2.WSASetEvent(self.event)
+        return False
+      if self.events[mode]:
+        return True
+      if end_time is not None:
+        rem_time = int((end_time - time.monotonic()) * 1000)
+
+  def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
+    timeout, rt, ul = self.lock(timeout, m)
+    try:
+      if self.closed:
+        raise ClosedError()
+      end_time = None
+      self._elock[m].acquire()
+      while True:
+        try:
+          r = func(self, *args, **kwargs)
+          if len(args) <= f or not (args[f] & socket.MSG_PEEK):
+            self.events[m] = False
+          return r
+        except BlockingIOError:
+          self.events[m] = False
+          if timeout == 0:
+            raise ClosedError() if self.closed else TimeoutError()
+          if rt is not None and end_time is None:
+            end_time = rt + time.monotonic()
+            w = self.wait(end_time, m, rt)
+          else:
+            w = self.wait(end_time, m)
+          if w is False:
+            raise ClosedError() if self.closed else TimeoutError()
+        except OSError as err:
+          if err.winerror is not None:
+            self.events[m] = False
+          raise
+    finally:
+      self._elock[m].release()
+      self.unlock(ul)
+
+  def _connect_pending_check(self, rt):
+    end_time = None if rt is None else rt + time.monotonic()
+    if not self.wait(end_time, rt, 'c'):
+      return True
+    del self._connect_pending
+    return None if rt is None else max(end_time - time.monotonic(), 0)
+
+  def connect(self, *args, timeout='', **kwargs):
+    timeout, rt, ul =  self.lock(timeout, 'c')
+    try:
+      if self.closed:
+        raise ClosedError()
+      rt = self._connect_pending(rt)
+      if rt is True:
+        raise AlreadyError()
+      self._elock['c'].acquire()
+      try:
+        socket.socket.connect(self, *args, **kwargs)
+        self.events['c'] = False
+        self.events['w'] = False
+        self._connect_pending = self._connect_pending_check
+        return
+      except BlockingIOError:
+        self.events['c'] = False
+        self.events['w'] = False
+        if timeout == 0 or self.wait((None if rt is None else rt + time.monotonic()), 'c', rt) is False:
+          self._connect_pending = self._connect_pending_check
+          raise ClosedError() if self.closed else TimeoutError()
+        if not self.events['w']:
+          raise WinError(self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR))
+      except OSError as err:
+        if err.winerror is not None and err.winerror != 10056:
+          self.events['c'] = False
+          self.events['w'] = False
+          self._connect_pending = self._connect_pending_check
+        raise
+    finally:
+      self._elock['c'].release()
+      self.unlock(ul)
+
+  def connect_ex(self, *args, timeout='', **kwargs):
+    timeout, rt, ul =  self.lock(timeout, 'c')
+    try:
+      if self.closed:
+        return 10038
+      rt = self._connect_pending(rt)
+      if rt is True:
+        return 10037
+      self._elock['c'].acquire()
+      try:
+        r = socket.socket.connect_ex(self, *args, **kwargs)
+        if r == 10035:
+          raise BlockingIOError()
+        if r != 10056:
+          self.events['c'] = False
+          self.events['w'] = False
+          self._connect_pending = self._connect_pending_check
+        return r
+      except BlockingIOError:
+        self.events['c'] = False
+        self.events['w'] = False
+        if timeout == 0 or self.wait((None if rt is None else rt + time.monotonic()), 'c', rt) is False:
+          self._connect_pending = self._connect_pending_check
+          return 10038 if self.closed else 10035
+        return self.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) if not self.events['w'] else 0
+    finally:
+      self._elock['c'].release()
+      self.unlock(ul)
+
+  @classmethod
+  def waitmult(cls, timeout, *idsocks, event=None, reset_event=False):
+    if not event in ('r', 'a', 'w', 'c'):
+      return ()
+    rt = timeout
+    uls = []
+    for idsock in idsocks:
+      try:
+        if rt is not None and rt < 0:
+          raise TimeoutError()
+        rt, ul = idsock.lock(rt, event)[1:2]
+        uls.append(ul)
+      except ClosedError:
+        uls.append(None)
+      except TimeoutError:
+        for idsock, ul in zip(idsocks, uls):
+          if ul is not None:
+            idsock.unlock(ul)
+        return ()
+    if rt is not None:
+      end_time = rt + time.monotonic()
+    while True:
+      if rt is not None and rt < 0:
+        r = ()
+        break
+      idsocks_ = tuple(idsock for idsock in idsocks if idsock.mode)
+      c = len(idsocks_)
+      if cls._wait_for_events(ULONG(int(rt * 1000) if timeout is not None else -1), tuple(e for idsock in idsocks_ for e in (idsock.event, idsock.events[event]))) == 258:
+        r = ()
+        break
+      r = []
+      for idsock in idsocks_:
+        if not idsock.mode:
+          continue
+        if not ws2.WSAWaitForMultipleEvents(ULONG(1), byref(idsock.event), BOOL(False), ULONG(0), BOOL(False)):
+          with idsock._erlock, idsock._ewlock:
+            if ws2.WSAEnumNetworkEvents(SOCKET(idsock.sock_fileno), idsock.event, byref(idsock._network_events)):
+              ws2.WSAResetEvent(idsock.event)
+            else:
+              for m in ('r', 'a', 'w', 'c'):
+                if idsock._network_events.lNetworkEvents & cls.MODES_M[m]:
+                  ws2.WSASetEvent(idsock.events[m])
+        if not ws2.WSAWaitForMultipleEvents(ULONG(1), byref(idsock.events[event]), BOOL(False), ULONG(0), BOOL(False)):
+          r.append(idsock)
+          if reset_event:
+            ws2.WSAResetEvent(idsock.events[event])
+      if r:
+        break
+      if rt is not None:
+        rt = end_time - time.monotonic()
+    for idsock, ul in zip(idsocks, uls):
+      if ul is not None:
+        idsock.unlock(ul)
+    return r
+
+
 class IDSocketGenerator(ISocketGenerator):
 
   CLASS = IDSocket
@@ -916,6 +1123,16 @@ class IDSocketGenerator(ISocketGenerator):
         idsock._wevent.dec()
       self.events[event] = None
     return ()
+
+
+class IDAltSocketGenerator(IDSocketGenerator):
+
+  CLASS = IDAltSocket
+
+  def waitany(self, timeout, event):
+    if not event in ('r', 'a', 'w', 'c') or self.closed:
+      return ()
+    return IDSocket.waitmult(timeout, *(idsock for idsock, activ in self.idsockets.items() if activ), event=event, reset_event=False)
 
 
 class RSASelfSigned:
@@ -2416,7 +2633,7 @@ class HTTPStreamMessage(HTTPMessage):
     return http_message
 
 
-class HTTPBaseRequest:
+class _HTTPBaseRequest:
 
   RequestPattern = \
     '%s %s HTTP/1.1\r\n' \
@@ -2431,7 +2648,7 @@ class HTTPBaseRequest:
 
   @classmethod
   def connect(cls, url, url_p, headers, timeout, max_hlength, end_time, pconnection, ip):
-    raise TypeError('the class HTTPBaseRequest is not intended to be instantiated directly')
+    raise TypeError('the class _HTTPBaseRequest is not intended to be instantiated directly')
 
   @staticmethod
   def _netloc_split(loc, def_port=''):
@@ -2649,7 +2866,7 @@ class HTTPBaseRequest:
 
 def HTTPRequestConstructor(socket_source=socket, proxy=None):
   if not proxy or not proxy.get('ip', None):
-    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket else ssl.SSLContext, socket_source=socket_source):
+    class HTTPRequest(_HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket else ssl.SSLContext, socket_source=socket_source):
       @classmethod
       def connect(cls, url, url_p, headers, timeout, max_hlength, end_time, pconnection, ip):
         if pconnection[0] is None:
@@ -2667,7 +2884,7 @@ def HTTPRequestConstructor(socket_source=socket, proxy=None):
           raise
         return (url_p.path + ('?' + url_p.query if url_p.query else '')).replace(' ', '%20') or '/'
   else:
-    class HTTPRequest(HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket or proxy.get('secure', None) else ssl.SSLContext, socket_source=socket_source):
+    class HTTPRequest(_HTTPBaseRequest, context_class=NestedSSLContext if socket_source != socket or proxy.get('secure', None) else ssl.SSLContext, socket_source=socket_source):
       PROXY = (proxy['ip'], proxy['port'])
       PROXY_AUTH = ('Basic ' + base64.b64encode(proxy['auth'].encode('utf-8')).decode('utf-8')) if proxy.get('auth', None) else ''
       PROXY_SECURE = bool(proxy.get('secure', None))
@@ -2818,6 +3035,11 @@ class MixinIDServer:
       cls.idsocket = property(lambda self: self.isocket)
 
 
+class MixinIDAltServer(MixinIDServer):
+
+  CLASS = IDAltSocketGenerator
+
+
 class UDPIServer(BaseIServer):
 
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
@@ -2847,6 +3069,11 @@ class UDPIServer(BaseIServer):
 
 
 class UDPIDServer(MixinIDServer, UDPIServer):
+
+  pass
+
+
+class UDPIDAltServer(MixinIDAltServer, UDPIServer):
 
   pass
 
@@ -2884,6 +3111,11 @@ class TCPIServer(BaseIServer):
 
 
 class TCPIDServer(MixinIDServer, TCPIServer):
+
+  pass
+
+
+class TCPIDAltServer(MixinIDAltServer, TCPIServer):
 
   pass
 
@@ -2985,6 +3217,364 @@ class MultiUDPIServer(UDPIServer):
 class MultiUDPIDServer(MixinIDServer, MultiUDPIServer):
 
   pass
+
+
+class MultiUDPIDAltServer(MixinIDAltServer, MultiUDPIServer):
+
+  pass
+
+
+class HTTPRequestHandler(RequestHandler):
+  _mimetypes = mimetypes.MimeTypes(strict=False)
+  _mimetypes.read_windows_registry(strict=False)
+  _mimetypes.encodings_map= {}
+  shlwapi.StrCmpLogicalW.restype = INT
+  shlwapi.StrCmpLogicalW.argtypes = (LPCWSTR, LPCWSTR)
+  _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
+
+  def _send(self, h, bo=None, bsize=None, brange=None):
+    try:
+      self.request.sendall(h.encode('ISO-8859-1'))
+      if isinstance(bo, IOBase):
+        bo.seek((brange[0] if brange else 0), os.SEEK_SET)
+        r = brange[1] - brange[0] if brange else bsize
+        while r > 0:
+          b = bo.read(min(r, 1048576))
+          if not b:
+            raise
+          r -= len(b)
+          self.request.sendall(b)
+      elif bo is not None:
+        self.request.sendall(bo)
+      return True
+    except:
+      return False
+
+  def _send_opt(self):
+    resp = \
+      'HTTP/1.1 200 OK\r\n' \
+      'Content-Length: 0\r\n' \
+      'Date: ' + email.utils.formatdate(time.time(), usegmt=True) + '\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      'Allow: OPTIONS, HEAD, GET%s\r\n' \
+      '\r\n' % (', PUT' if self.server.put else '')
+    return self._send(resp)
+
+  def _send_err(self, e):
+    m = {501: 'Not Implemented', 404: 'Not found', 403: 'Forbidden', 405: 'Method Not Allowed', 416: 'Range not satisfiable'}.get(e, '')
+    rbody = \
+      '<!DOCTYPE html>\r\n' \
+      '<html lang="en">\r\n' \
+      '  <head>\r\n' \
+      '    <meta charset="utf-8">\r\n' \
+      '    <title>%d %s</title>\r\n' \
+      '  </head>\r\n' \
+      '  <body>\r\n' \
+      '    <h1>%s</h1>\r\n' \
+      '  </body>\r\n' \
+      '</html>' % (e, m, m)
+    rbody = rbody.encode('utf-8')
+    resp = \
+      'HTTP/1.1 %d %s\r\n' \
+      'Content-Type: text/html; charset=utf-8\r\n' \
+      'Content-Length: %d\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True))
+    return self._send(resp, rbody)
+  def _send_err_ni(self):
+    return self._send_err(501)
+  def _send_err_nf(self):
+    return self._send_err(404)
+  def _send_err_rns(self):
+    return self._send_err(416)
+  def _send_err_f(self):
+    return self._send_err(403)
+  def _send_err_mna(self):
+    return self._send_err(405)
+
+  def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None):
+    resp = \
+      'HTTP/1.1 %s\r\n' \
+      'Content-Type: %s\r\n' \
+      'Content-Length: %d\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, must-revalidate\r\n' \
+      'Accept-Ranges: bytes\r\n' \
+      '%s' \
+      '%s' \
+      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), ('' if rrange is None else 'Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize)), ('' if rmod is None else 'Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True)))
+    return self._send(resp, rbody, rsize, rrange)
+
+  def _send_nm(self):
+    resp = \
+      'HTTP/1.1 304 Not Modified\r\n' \
+      'Content-Length: 0\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      '\r\n' % email.utils.formatdate(time.time(), usegmt=True)
+    return self._send(resp)
+
+  def _send_mp(self, loc):
+    resp = \
+      'HTTP/1.1 301 Moved Permanently\r\n' \
+      'Content-Length: 0\r\n' \
+      'Location: %s\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      '\r\n' % (loc, email.utils.formatdate(time.time(), usegmt=True))
+    return self._send(resp)
+
+  def _send_c(self, loc, e=False):
+    resp = \
+      'HTTP/1.1 %s\r\n' \
+      'Content-Length: 0\r\n' \
+      'Content-Location: %s\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      '\r\n' % (('204 No Content' if e else '201 Created'), loc, email.utils.formatdate(time.time(), usegmt=True))
+    return self._send(resp)
+
+  def _process_path(self, root, qpath):
+    try:
+      path, osort = qpath.partition('?')[::2]
+      try:
+        path = urllib.parse.unquote(path, errors='surrogatepass')
+      except:
+        path = urllib.parse.unquote(path)
+      spath = path.endswith('/')
+      path = os.path.normpath(path).lstrip('.\\')
+      apath = os.path.normpath(os.path.join(root, path))
+      if os.path.commonpath((root, apath)) != root:
+        raise
+      rpath = ('\\' + path).replace('\\', '/')
+      if spath and not rpath.endswith('/'):
+        rpath += '/'
+    except:
+      return None, None, None
+    return apath, rpath, osort
+
+  def handle(self):
+    closed = False
+    root = self.server.root
+    while not closed and not self.server.closed:
+      req = HTTPStreamMessage(self.request)
+      if self.server.closed:
+        break
+      if req.expect_close:
+        closed = True
+      if not req.method:
+        closed = True
+        continue
+      if req.method == 'OPTIONS':
+        if not self._send_opt():
+          closed = True
+      elif req.method in ('GET', 'HEAD'):
+        apath, rpath, osort = self._process_path(root, req.path)
+        if apath is None:
+          if not self._send_err_f():
+            closed = True
+          continue
+        if os.path.isdir(apath):
+          if not rpath.endswith('/'):
+            if not self._send_mp(urllib.parse.quote(rpath + '/')):
+              closed = True
+            continue
+          for ind in ('index.htm', 'index.html'):
+            try:
+              ipath = os.path.join(apath, ind)
+              if os.path.isfile(ipath):
+                apath = ipath
+                break
+            except:
+              pass
+          else:
+            try:
+              l = [(e.is_dir(), e.name, e.stat()) for e in os.scandir(apath) if (e.is_dir() or e.is_file())]
+            except:
+              if not self._send_err_f():
+                closed = True
+              continue
+            nsort = '?NA'
+            msort = '?MA'
+            ssort = '?SA'
+            _fn_cmp = self.__class__._fn_cmp
+            if osort == "ND":
+              l.sort(key=lambda t:_fn_cmp(t[1]), reverse=True)
+            else:
+              l.sort(key=lambda t:_fn_cmp(t[1]))
+              if osort == "MA":
+                msort = '?MD'
+                l.sort(key=lambda t:t[2].st_mtime)
+              elif osort == "MD":
+                l.sort(key=lambda t:t[2].st_mtime, reverse=True)
+              elif osort == "SA":
+                ssort = '?SD'
+                l.sort(key=lambda t:t[2].st_size)
+              elif osort == "SD":
+                l.sort(key=lambda t:t[2].st_size, reverse=True)
+              else:
+                nsort = '?ND'
+            l.sort(key=lambda t:t[0], reverse=True)
+            for i in range(len(l)):
+              e = l[i]
+              n = e[1] + '\\' if e[0] else e[1]
+              rn = e[1] + '/' if e[0] else e[1]
+              mt = time.strftime('%Y-%m-%d %H:%M', time.localtime(e[2].st_mtime))
+              s = '-' if e[0] else format(e[2].st_size, ',d').replace(',', '·')
+              l[i] = '      <tr><td><a href="%s">%s</a><td align="right">&nbsp;&nbsp;%s&nbsp;&nbsp;</td><td align="right">%s</td></tr>\r\n' %(urllib.parse.quote(rn, errors='surrogatepass'), html.escape(n), mt, s)
+            rbody = \
+              '<!DOCTYPE html>\r\n' \
+              '<html lang="en">\r\n' \
+              '  <head>\r\n' \
+              '    <meta charset="utf-8">\r\n' \
+              '    <title>Index of %s</title>\r\n' \
+              '    <script>\r\n' \
+              '      function cd() {\r\n' \
+              '        let n = window.prompt("Name of the directory:");\r\n' \
+              '        if (n) {\r\n' \
+              '          n += "/";\r\n' \
+              '          fetch(n, {method: "PUT"}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("Directory creation failed.");});\r\n' \
+              '        }\r\n' \
+              '      }\r\n' \
+              '      function uf(f) {\r\n' \
+              '        if (! f) {return;}\r\n' \
+              '        f.arrayBuffer().then(function(b) {let n = window.prompt("Name of the file:", f.name); if (n) {n = n.replace(/\\/+$/, ''); fetch(n, {method: "PUT", body: b}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("File upload failed.");});}});\r\n' \
+              '      }\r\n' \
+              '    </script>\r\n' \
+              '  </head>\r\n' \
+              '  <body>\r\n' \
+              '    <h1>Index of %s</h1>\r\n' \
+              '    <table>\r\n' \
+              '      <tr><th><a href="%s">Name</a></th><th><a href="%s">Last modified</a></th><th><a href="%s">Size</a></th></tr>\r\n' \
+              '      <tr><th colspan="3"><hr></th></tr>\r\n' \
+              '%s'\
+              '%s'\
+              '      <tr><th colspan="3"><hr></th></tr>\r\n' \
+              '    </table>\r\n' \
+              '%s'\
+              '  </body>\r\n' \
+              '</html>' % (*((html.escape(rpath),) * 2), nsort, msort, ssort, ('' if rpath == '/' else '     <tr><td><a href="../">Parent Directory</a><td align="right">&nbsp;&nbsp;&nbsp;&nbsp;</td><td align="right">-</td></tr>\r\n'), ''.join(l), ('<button onclick="cd()">Create directory</button>&nbsp;&nbsp;<button onclick="document.getElementsByTagName(\'input\')[0].click()">Upload file</button><input type="file" autocomplete="off" style="display:none;" onchange="uf(this.files[0]); this.value=\'\'">' if self.server.put else ''))
+            rbody = rbody.encode('utf-8', errors='surrogateescape')
+            if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None)):
+              closed = True
+            continue
+        if os.path.isfile(apath):
+          btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
+          try:
+            f = open(apath, 'rb')
+            fs = os.stat(f.fileno())
+            if req.header('If-None-Match') is None:
+              ms = req.header('If-Modified-Since')
+              if ms is not None:
+                try:
+                  ms = email.utils.parsedate_tz(ms)
+                  if ms[9]:
+                    raise
+                  ms = (*ms[:8], 0, 0)
+                  if int(fs.st_mtime) <= email.utils.mktime_tz(ms):
+                    if not self._send_nm():
+                      closed = True
+                    continue
+                except:
+                  pass
+            rrange = req.header('Range')
+            if rrange:
+              try:
+                unit, rrange = rrange.rpartition('=')[::2]
+                if unit and unit.lower() != 'bytes':
+                  raise
+                rrange = rrange.split('-')
+                rrange = (rrange[0].strip(), rrange[1].split(',')[0].strip())
+                if not rrange[0]:
+                  rrange = (fs.st_size - int(rrange[1]), fs.st_size)
+                else:
+                  rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, fs.st_size) if rrange[1] else fs.st_size))
+                if rrange[0] < 0 or rrange[0] >= rrange[1]:
+                  raise
+              except:
+                if not self._send_err_rns():
+                  closed = True
+                continue
+            if not self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange):
+              closed = True
+          except:
+            if not self._send_err_f():
+              closed = True
+          finally:
+            try:
+              f.close()
+            except:
+              pass
+        else:
+          if not self._send_err_nf():
+            closed = True
+      elif req.method == 'PUT':
+        if not self.server.put:
+          if not self._send_err_mna():
+            closed = True
+          continue
+        apath, rpath, osort = self._process_path(root, req.path)
+        if apath is None:
+          if not self._send_err_f():
+            closed = True
+          continue
+        if rpath.endswith('/'):
+          e = os.path.isdir(apath)
+          try:
+            if e:
+              os.utime(apath, (time.time(),) * 2)
+              if not self._send_c(rpath, True):
+                closed = True
+            else:
+              os.mkdir(apath)
+              if not self._send_c(rpath):
+                closed = True
+          except FileNotFoundError:
+            if not self._send_err_nf():
+              closed = True
+          except:
+            if not self._send_err_f():
+              closed = True
+        else:
+          e = os.path.isfile(apath)
+          try:
+            f = open(apath, 'wb')
+            while True:
+              b = req.body(1048576)
+              if not b:
+                break
+              f.write(b)
+            if not self._send_c(rpath, e):
+              closed = True
+          except FileNotFoundError:
+            if not self._send_err_nf():
+              closed = True
+          except:
+            if not self._send_err_f():
+              closed = True
+          finally:
+            try:
+              f.close()
+            except:
+              pass
+      else:
+        if not self._send_err_ni():
+          closed = True
+
+
+class HTTPServer(TCPIServer):
+
+  def __init__(self, server_address, root_directory=None, allow_put=False, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
+    self.root = os.path.abspath(root_directory or os.getcwd())
+    self.put = allow_put
+    super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
 
 
 class WebSocketHandler:
@@ -3685,6 +4275,11 @@ class WebSocketIDServer(TCPIDServer):
     else:
       th = threading.Thread(target=self._shutdown, args=(rt, False), daemon=self.daemon_thread)
       th.start()
+
+
+class WebSocketIDAltServer(MixinIDAltServer, WebSocketIDServer):
+
+  pass
 
 
 class WebSocketIDClient(WebSocketHandler):
