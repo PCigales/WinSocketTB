@@ -3228,8 +3228,6 @@ class HTTPRequestHandler(RequestHandler):
   _mimetypes = mimetypes.MimeTypes(strict=False)
   _mimetypes.read_windows_registry(strict=False)
   _mimetypes.encodings_map= {}
-  shlwapi.StrCmpLogicalW.restype = INT
-  shlwapi.StrCmpLogicalW.argtypes = (LPCWSTR, LPCWSTR)
   _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
 
   def _send(self, h, bo=None, bsize=None, brange=None):
@@ -3245,7 +3243,7 @@ class HTTPRequestHandler(RequestHandler):
           r -= len(b)
           self.request.sendall(b)
       elif bo is not None:
-        self.request.sendall(bo)
+        self.request.sendall(memoryview(bo)[brange[0]:brange[1]] if brange else bo)
       return True
     except:
       return False
@@ -3258,11 +3256,10 @@ class HTTPRequestHandler(RequestHandler):
       'Server: SocketTB\r\n' \
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
       'Allow: OPTIONS, HEAD, GET%s\r\n' \
-      '\r\n' % (', PUT' if self.server.put else '')
+      '\r\n' % (', PUT' if self.server.max_upload else '')
     return self._send(resp)
 
-  def _send_err(self, e):
-    m = {501: 'Not Implemented', 404: 'Not found', 403: 'Forbidden', 405: 'Method Not Allowed', 416: 'Range not satisfiable'}.get(e, '')
+  def _send_err(self, e, m=''):
     rbody = \
       '<!DOCTYPE html>\r\n' \
       '<html lang="en">\r\n' \
@@ -3285,15 +3282,17 @@ class HTTPRequestHandler(RequestHandler):
       '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True))
     return self._send(resp, rbody)
   def _send_err_ni(self):
-    return self._send_err(501)
+    return self._send_err(501, 'Not implemented')
   def _send_err_nf(self):
-    return self._send_err(404)
+    return self._send_err(404, 'Not found')
   def _send_err_rns(self):
-    return self._send_err(416)
+    return self._send_err(416, 'Range not satisfiable')
   def _send_err_f(self):
-    return self._send_err(403)
+    return self._send_err(403, 'Forbidden')
   def _send_err_mna(self):
-    return self._send_err(405)
+    return self._send_err(405, 'Method not allowed')
+  def _send_err_ptl(self):
+    return self._send_err(413, 'Payload too large')
 
   def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None):
     resp = \
@@ -3341,7 +3340,8 @@ class HTTPRequestHandler(RequestHandler):
       '\r\n' % (('204 No Content' if e else '201 Created'), loc, email.utils.formatdate(time.time(), usegmt=True))
     return self._send(resp)
 
-  def _process_path(self, root, qpath):
+  @classmethod
+  def _process_path(cls, root, qpath):
     try:
       path, osort = qpath.partition('?')[::2]
       try:
@@ -3349,7 +3349,9 @@ class HTTPRequestHandler(RequestHandler):
       except:
         path = urllib.parse.unquote(path)
       spath = path.endswith('/')
-      path = os.path.normpath(path).lstrip('.\\')
+      path = os.path.normpath(os.path.join('\\', path)).lstrip('\\')
+      if ':' in path or path.startswith('\\\\'):
+        raise
       apath = os.path.normpath(os.path.join(root, path))
       if os.path.commonpath((root, apath)) != root:
         raise
@@ -3359,6 +3361,78 @@ class HTTPRequestHandler(RequestHandler):
     except:
       return None, None, None
     return apath, rpath, osort
+
+  @classmethod
+  def _html_from_dir(cls, apath, rpath, osort='', upl=False):
+    l = [(e.is_dir(), e.name, e.stat()) for e in os.scandir(apath) if (e.is_dir() or e.is_file())]
+    nsort = '?NA'
+    msort = '?MA'
+    ssort = '?SA'
+    _fn_cmp = cls._fn_cmp
+    if osort == 'ND':
+      l.sort(key=lambda t:_fn_cmp(LPCWSTR(t[1])), reverse=True)
+    else:
+      l.sort(key=lambda t:_fn_cmp(LPCWSTR(t[1])))
+      if osort == 'MA':
+        msort = '?MD'
+        l.sort(key=lambda t:t[2].st_mtime)
+      elif osort == 'MD':
+        l.sort(key=lambda t:t[2].st_mtime, reverse=True)
+      elif osort == 'SA':
+        ssort = '?SD'
+        l.sort(key=lambda t:t[2].st_size)
+      elif osort == 'SD':
+        l.sort(key=lambda t:t[2].st_size, reverse=True)
+      else:
+        nsort = '?ND'
+      l.sort(key=lambda t:t[0], reverse=True)
+    for i in range(len(l)):
+      e = l[i]
+      n = e[1] + '\\' if e[0] else e[1]
+      rn = e[1] + '/' if e[0] else e[1]
+      mt = time.strftime('%Y-%m-%d %H:%M', time.localtime(e[2].st_mtime))
+      s = '-' if e[0] else format(e[2].st_size, ',d').replace(',', '·')
+      l[i] = '      <tr><td><a href="%s">%s</a><td align="right">&nbsp;&nbsp;%s&nbsp;&nbsp;</td><td align="right">%s</td></tr>\r\n' %(urllib.parse.quote(rn, errors='surrogatepass'), html.escape(n), mt, s)
+    rbody = \
+      '<!DOCTYPE html>\r\n' \
+      '<html lang="en">\r\n' \
+      '  <head>\r\n' \
+      '    <meta charset="utf-8">\r\n' \
+      '    <title>Index of %s</title>\r\n' \
+      '    <script>\r\n' \
+      '      function cd() {\r\n' \
+      '        let n;\r\n' \
+      '        do {\r\n' \
+      '          n = window.prompt("Name of the directory:");\r\n' \
+      '          if (! n) {return;}\r\n' \
+      '        } while (n.match(/[\\\\\\/\\?\\*:<>"\\|]/));\r\n' \
+      '        n += "/";\r\n' \
+      '        fetch(encodeURI(n), {method: "PUT"}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("Directory creation failed.");});\r\n' \
+      '      }\r\n' \
+      '      function uf(f) {\r\n' \
+      '        if (! f) {return;}\r\n' \
+      '        let n;\r\n' \
+      '        do {\r\n' \
+      '          n = window.prompt("Name of the file:", f.name);\r\n' \
+      '          if (! n) {return;}\r\n' \
+      '        } while (n.match(/[\\\\\\/\\?\\*:<>"\\|]/));\r\n' \
+      '        fetch(encodeURI(n), {method: "PUT", body: f}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("File upload failed.");});\r\n' \
+      '      }\r\n' \
+      '    </script>\r\n' \
+      '  </head>\r\n' \
+      '  <body>\r\n' \
+      '    <h1>Index of %s</h1>\r\n' \
+      '    <table>\r\n' \
+      '      <tr><th><a href="%s">Name</a></th><th><a href="%s">Last modified</a></th><th><a href="%s">Size</a></th></tr>\r\n' \
+      '      <tr><th colspan="3"><hr></th></tr>\r\n' \
+      '%s'\
+      '%s'\
+      '      <tr><th colspan="3"><hr></th></tr>\r\n' \
+      '    </table>\r\n' \
+      '%s'\
+      '  </body>\r\n' \
+      '</html>' % (*((html.escape(rpath),) * 2), nsort, msort, ssort, ('' if rpath == '/' else '     <tr><td><a href="../">Parent Directory</a><td align="right">&nbsp;&nbsp;&nbsp;&nbsp;</td><td align="right">-</td></tr>\r\n'), ''.join(l), ('<button onclick="cd()">Create directory</button>&nbsp;&nbsp;<button onclick="document.getElementsByTagName(\'input\')[0].click()">Upload file</button><input type="file" autocomplete="off" style="display:none;" onchange="uf(this.files[0]); this.value=\'\'">' if upl else ''))
+    return rbody.encode('utf-8', errors='surrogateescape')
 
   def handle(self):
     closed = False
@@ -3375,195 +3449,167 @@ class HTTPRequestHandler(RequestHandler):
       if req.method == 'OPTIONS':
         if not self._send_opt():
           closed = True
-      elif req.method in ('GET', 'HEAD'):
+      elif req.method in ('GET', 'HEAD', 'PUT'):
         apath, rpath, osort = self._process_path(root, req.path)
         if apath is None:
           if not self._send_err_f():
             closed = True
           continue
-        if os.path.isdir(apath):
-          if not rpath.endswith('/'):
-            if not self._send_mp(urllib.parse.quote(rpath + '/')):
+        rrange = req.header('Range')
+        if rrange:
+          try:
+            unit, rrange = rrange.rpartition('=')[::2]
+            if unit and unit.lower() != 'bytes':
+              raise
+            rrange = rrange.split('-')
+            rrange = (rrange[0].strip(), rrange[1].split(',')[0].strip())
+          except:
+            if not self._send_err_rns():
               closed = True
             continue
-          for ind in ('index.htm', 'index.html'):
+        if req.method != 'PUT':
+          f = None
+          try:
+            if os.path.isdir(apath):
+              if not rpath.endswith('/'):
+                if not self._send_mp(urllib.parse.quote(rpath + '/')):
+                  closed = True
+                continue
+              for ind in ('index.htm', 'index.html'):
+                try:
+                  ipath = os.path.join(apath, ind)
+                  if os.path.isfile(ipath):
+                    apath = ipath
+                    break
+                except:
+                  pass
+              else:
+                rbody = self._html_from_dir(apath, rpath, osort, bool(self.server.max_upload))
+                if rrange:
+                  try:
+                    rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, len(rbody)) if rrange[1] else len(rbody))) if rrange[0] else (len(rbody) - int(rrange[1]), len(rbody))
+                    if rrange[0] < 0 or rrange[0] >= rrange[1]:
+                      raise
+                  except:
+                    if not self._send_err_rns():
+                      closed = True
+                    continue
+                if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange):
+                  closed = True
+                continue
+            if os.path.isfile(apath):
+              btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
+              f = open(apath, 'rb')
+              fs = os.stat(f.fileno())
+              if req.header('If-None-Match') is None:
+                ms = req.header('If-Modified-Since')
+                if ms is not None:
+                  try:
+                    ms = email.utils.parsedate_tz(ms)
+                    if ms[9]:
+                      raise
+                    ms = (*ms[:8], 0, 0)
+                    if int(fs.st_mtime) <= email.utils.mktime_tz(ms):
+                      if not self._send_nm():
+                        closed = True
+                      continue
+                  except:
+                    pass
+              if rrange:
+                try:
+                  rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, fs.st_size) if rrange[1] else fs.st_size)) if rrange[0] else (fs.st_size - int(rrange[1]), fs.st_size)
+                  if rrange[0] < 0 or rrange[0] >= rrange[1]:
+                    raise
+                except:
+                  if not self._send_err_rns():
+                    closed = True
+                  continue
+              if not self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange):
+                closed = True
+            else:
+              if not self._send_err_nf():
+                closed = True
+          except:
+            if not self._send_err_f():
+              closed = True
+          finally:
+            if f:
+              try:
+                f.close()
+              except:
+                pass
+        else:
+          if not self.server.max_upload:
+            if not self._send_err_mna():
+              closed = True
+            continue
+          if rpath.endswith('/'):
             try:
-              ipath = os.path.join(apath, ind)
-              if os.path.isfile(ipath):
-                apath = ipath
-                break
-            except:
-              pass
-          else:
-            try:
-              l = [(e.is_dir(), e.name, e.stat()) for e in os.scandir(apath) if (e.is_dir() or e.is_file())]
+              if os.path.isdir(apath):
+                os.utime(apath, (time.time(),) * 2)
+                if not self._send_c(rpath, True):
+                  closed = True
+              else:
+                os.mkdir(apath)
+                if not self._send_c(rpath):
+                  closed = True
+            except FileNotFoundError:
+              if not self._send_err_nf():
+                closed = True
             except:
               if not self._send_err_f():
                 closed = True
-              continue
-            nsort = '?NA'
-            msort = '?MA'
-            ssort = '?SA'
-            _fn_cmp = self.__class__._fn_cmp
-            if osort == "ND":
-              l.sort(key=lambda t:_fn_cmp(t[1]), reverse=True)
-            else:
-              l.sort(key=lambda t:_fn_cmp(t[1]))
-              if osort == "MA":
-                msort = '?MD'
-                l.sort(key=lambda t:t[2].st_mtime)
-              elif osort == "MD":
-                l.sort(key=lambda t:t[2].st_mtime, reverse=True)
-              elif osort == "SA":
-                ssort = '?SD'
-                l.sort(key=lambda t:t[2].st_size)
-              elif osort == "SD":
-                l.sort(key=lambda t:t[2].st_size, reverse=True)
-              else:
-                nsort = '?ND'
-            l.sort(key=lambda t:t[0], reverse=True)
-            for i in range(len(l)):
-              e = l[i]
-              n = e[1] + '\\' if e[0] else e[1]
-              rn = e[1] + '/' if e[0] else e[1]
-              mt = time.strftime('%Y-%m-%d %H:%M', time.localtime(e[2].st_mtime))
-              s = '-' if e[0] else format(e[2].st_size, ',d').replace(',', '·')
-              l[i] = '      <tr><td><a href="%s">%s</a><td align="right">&nbsp;&nbsp;%s&nbsp;&nbsp;</td><td align="right">%s</td></tr>\r\n' %(urllib.parse.quote(rn, errors='surrogatepass'), html.escape(n), mt, s)
-            rbody = \
-              '<!DOCTYPE html>\r\n' \
-              '<html lang="en">\r\n' \
-              '  <head>\r\n' \
-              '    <meta charset="utf-8">\r\n' \
-              '    <title>Index of %s</title>\r\n' \
-              '    <script>\r\n' \
-              '      function cd() {\r\n' \
-              '        let n = window.prompt("Name of the directory:");\r\n' \
-              '        if (n) {\r\n' \
-              '          n += "/";\r\n' \
-              '          fetch(n, {method: "PUT"}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("Directory creation failed.");});\r\n' \
-              '        }\r\n' \
-              '      }\r\n' \
-              '      function uf(f) {\r\n' \
-              '        if (! f) {return;}\r\n' \
-              '        f.arrayBuffer().then(function(b) {let n = window.prompt("Name of the file:", f.name); if (n) {n = n.replace(/\\/+$/, ''); fetch(n, {method: "PUT", body: b}).then(function(r) {if (! r.ok) {throw null;} else {window.location.reload();}}).catch(function(e) {window.alert("File upload failed.");});}});\r\n' \
-              '      }\r\n' \
-              '    </script>\r\n' \
-              '  </head>\r\n' \
-              '  <body>\r\n' \
-              '    <h1>Index of %s</h1>\r\n' \
-              '    <table>\r\n' \
-              '      <tr><th><a href="%s">Name</a></th><th><a href="%s">Last modified</a></th><th><a href="%s">Size</a></th></tr>\r\n' \
-              '      <tr><th colspan="3"><hr></th></tr>\r\n' \
-              '%s'\
-              '%s'\
-              '      <tr><th colspan="3"><hr></th></tr>\r\n' \
-              '    </table>\r\n' \
-              '%s'\
-              '  </body>\r\n' \
-              '</html>' % (*((html.escape(rpath),) * 2), nsort, msort, ssort, ('' if rpath == '/' else '     <tr><td><a href="../">Parent Directory</a><td align="right">&nbsp;&nbsp;&nbsp;&nbsp;</td><td align="right">-</td></tr>\r\n'), ''.join(l), ('<button onclick="cd()">Create directory</button>&nbsp;&nbsp;<button onclick="document.getElementsByTagName(\'input\')[0].click()">Upload file</button><input type="file" autocomplete="off" style="display:none;" onchange="uf(this.files[0]); this.value=\'\'">' if self.server.put else ''))
-            rbody = rbody.encode('utf-8', errors='surrogateescape')
-            if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None)):
-              closed = True
-            continue
-        if os.path.isfile(apath):
-          btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
-          try:
-            f = open(apath, 'rb')
-            fs = os.stat(f.fileno())
-            if req.header('If-None-Match') is None:
-              ms = req.header('If-Modified-Since')
-              if ms is not None:
+          else:
+            try:
+              e = os.path.isfile(apath)
+              rmlength = rrlength = self.server.max_upload
+              if rrange:
+                f = open(apath, ('r+b' if e else 'wb'))
+                fs = os.stat(f.fileno())
                 try:
-                  ms = email.utils.parsedate_tz(ms)
-                  if ms[9]:
-                    raise
-                  ms = (*ms[:8], 0, 0)
-                  if int(fs.st_mtime) <= email.utils.mktime_tz(ms):
-                    if not self._send_nm():
-                      closed = True
-                    continue
+                  if not rrange[0]:
+                    f.seek(-min(int(rrange[1]), fs.st_size), os.SEEK_END)
+                  else:
+                    f.seek(int(rrange[0]), os.SEEK_SET)
+                    if rrange[1]:
+                      rrlength = int(rrange[1]) + 1 - int(rrange[0])
+                      if rrlength < 0:
+                        raise
                 except:
-                  pass
-            rrange = req.header('Range')
-            if rrange:
-              try:
-                unit, rrange = rrange.rpartition('=')[::2]
-                if unit and unit.lower() != 'bytes':
-                  raise
-                rrange = rrange.split('-')
-                rrange = (rrange[0].strip(), rrange[1].split(',')[0].strip())
-                if not rrange[0]:
-                  rrange = (fs.st_size - int(rrange[1]), fs.st_size)
-                else:
-                  rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, fs.st_size) if rrange[1] else fs.st_size))
-                if rrange[0] < 0 or rrange[0] >= rrange[1]:
-                  raise
-              except:
-                if not self._send_err_rns():
+                  self._send_err_rns()
                   closed = True
+                  continue
+              else:
+                f = open(apath, 'wb')
+              while rmlength >= 0:
+                b = req.body(1048576)
+                if not b:
+                  break
+                rmlength -= len(b)
+                if rrlength < 0:
+                  continue
+                rrlength -= len(b)
+                if rmlength < 0 or rrlength < 0:
+                  f.write(b[:min(rmlength, rrlength)])
+                else:
+                  f.write(b)
+              if rmlength < 0:
+                self._send_err_ptl()
+                closed = True
                 continue
-            if not self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange):
-              closed = True
-          except:
-            if not self._send_err_f():
-              closed = True
-          finally:
-            try:
-              f.close()
-            except:
-              pass
-        else:
-          if not self._send_err_nf():
-            closed = True
-      elif req.method == 'PUT':
-        if not self.server.put:
-          if not self._send_err_mna():
-            closed = True
-          continue
-        apath, rpath, osort = self._process_path(root, req.path)
-        if apath is None:
-          if not self._send_err_f():
-            closed = True
-          continue
-        if rpath.endswith('/'):
-          e = os.path.isdir(apath)
-          try:
-            if e:
-              os.utime(apath, (time.time(),) * 2)
-              if not self._send_c(rpath, True):
+              if not self._send_c(rpath, e):
                 closed = True
-            else:
-              os.mkdir(apath)
-              if not self._send_c(rpath):
-                closed = True
-          except FileNotFoundError:
-            if not self._send_err_nf():
+            except FileNotFoundError:
+              self._send_err_nf()
               closed = True
-          except:
-            if not self._send_err_f():
-              closed = True
-        else:
-          e = os.path.isfile(apath)
-          try:
-            f = open(apath, 'wb')
-            while True:
-              b = req.body(1048576)
-              if not b:
-                break
-              f.write(b)
-            if not self._send_c(rpath, e):
-              closed = True
-          except FileNotFoundError:
-            if not self._send_err_nf():
-              closed = True
-          except:
-            if not self._send_err_f():
-              closed = True
-          finally:
-            try:
-              f.close()
             except:
-              pass
+              self._send_err_f()
+              closed = True
+            finally:
+              try:
+                f.close()
+              except:
+                pass
       else:
         if not self._send_err_ni():
           closed = True
@@ -3571,9 +3617,9 @@ class HTTPRequestHandler(RequestHandler):
 
 class HTTPServer(TCPIServer):
 
-  def __init__(self, server_address, root_directory=None, allow_put=False, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
+  def __init__(self, server_address, root_directory=None, max_upload_length=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.root = os.path.abspath(root_directory or os.getcwd())
-    self.put = allow_put
+    self.max_upload = max_upload_length
     super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
 
 
