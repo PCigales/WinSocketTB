@@ -3230,6 +3230,56 @@ class HTTPRequestHandler(RequestHandler):
   _mimetypes.encodings_map= {}
   _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
 
+  class _BrotliCompressor:
+    def __init__(self):
+      self.compressor = brotli.Compressor(quality=8, lgwin=19)
+    def compress(self, data):
+      return self.compressor.process(data)
+    def flush(self):
+      return self.compressor.finish()
+
+  @classmethod
+  def _set_enc(cls, aenc, fid=False):
+    enc = 'identity'
+    if aenc is not None:
+      aenc = aenc.lower().split(',')
+      for i in range(len(aenc)):
+        ae = aenc[i].split(';')
+        if len(ae) == 1:
+          aenc[i] = (ae[0].strip(), 1)
+        else:
+          aeq = ae[1].split('=')
+          try:
+            if aeq[0].strip() == 'q':
+              aenc[i] = (ae[0].strip(), min(max(float(aeq[1].strip()), 0), 1))
+            else:
+              raise
+          except:
+            aenc[i] = (ae[0].strip(), 1)
+      senc = {'identity': 3} if fid else ({'deflate': 0, 'gzip': 1, 'br': 2, 'identity': 3} if brotli else {'deflate': 0, 'gzip': 1, 'identity': 3})
+      aenc.sort(key=lambda ae:senc.get(ae[0], 100))
+      aenc.sort(key=lambda ae:ae[1], reverse=True)
+      for ae in aenc:
+        if ae[1] > 0:
+          if ae[0] == '*':
+            break
+          if ae[0] in senc:
+            enc = ae[0]
+            break
+        elif ae[0] in ('identity', '*'):
+          enc = None
+          break
+      if enc == 'deflate':
+        return 'deflate', zlib.compressobj(wbits=15)
+      elif enc == 'gzip':
+        return 'gzip', zlib.compressobj(wbits=31)
+      elif enc == 'br':
+        return 'br', cls._BrotliCompressor()
+      elif enc == 'identity':
+        return False
+      else:
+        return None
+
   def _send(self, h, bo=None, bsize=None, brange=None):
     try:
       self.request.sendall(h.encode('ISO-8859-1'))
@@ -3293,8 +3343,10 @@ class HTTPRequestHandler(RequestHandler):
     return self._send_err(405, 'Method not allowed')
   def _send_err_ptl(self):
     return self._send_err(413, 'Payload too large')
+  def _send_err_na(self):
+    return self._send_err(406, 'Not Acceptable')
 
-  def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None):
+  def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None, enc=False):
     resp = \
       'HTTP/1.1 %s\r\n' \
       'Content-Type: %s\r\n' \
@@ -3302,12 +3354,46 @@ class HTTPRequestHandler(RequestHandler):
       'Date: %s\r\n' \
       'Server: SocketTB\r\n' \
       'Cache-Control: no-cache, must-revalidate\r\n' \
+      '%s' \
       'Accept-Ranges: bytes\r\n' \
       '%s' \
       '%s' \
-      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), ('' if rrange is None else 'Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize)), ('' if rmod is None else 'Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True)))
+      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True))))
     return self._send(resp, rbody, rsize, rrange)
 
+  def _send_resp_chnk(self, rtype, rsize, rbody, rmod, enc):
+    resp = \
+      'HTTP/1.1 200 OK\r\n' \
+      'Content-Type: %s\r\n' \
+      'Transfer-Encoding: chunked\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, must-revalidate\r\n' \
+      'Content-Encoding: %s\r\n' \
+      'Accept-Ranges: bytes\r\n' \
+      'Last-Modified: %s\r\n' \
+      '\r\n' % (rtype, email.utils.formatdate(time.time(), usegmt=True), enc[0], email.utils.formatdate(rmod, usegmt=True))
+    try:
+      self.request.sendall(resp.encode('ISO-8859-1'))
+      if rbody:
+        rbody.seek(0, os.SEEK_SET)
+        r = rsize
+        while r > 0:
+          b = rbody.read(min(r, 1048576))
+          if not b:
+            raise
+          r -= len(b)
+          c = enc[1].compress(b)
+          if c:
+            self.request.sendall(b'%x\r\n%b\r\n' % (len(c), c))
+        c = enc[1].flush()
+        if c:
+          self.request.sendall(b'%x\r\n%b\r\n' % (len(c), c))
+        self.request.sendall(b'0\r\n\r\n')
+      return True
+    except:
+      return False
+  
   def _send_nm(self):
     resp = \
       'HTTP/1.1 304 Not Modified\r\n' \
@@ -3469,6 +3555,11 @@ class HTTPRequestHandler(RequestHandler):
             continue
         if req.method != 'PUT':
           f = None
+          enc = self._set_enc(req.header('Accept-Encoding'), bool(rrange))
+          if enc is None:
+            if not self._send_err_na():
+              closed = True
+            continue
           try:
             if os.path.isdir(apath):
               if not rpath.endswith('/'):
@@ -3494,7 +3585,9 @@ class HTTPRequestHandler(RequestHandler):
                     if not self._send_err_rns():
                       closed = True
                     continue
-                if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange):
+                elif enc:
+                  rbody = b''.join((enc[1].compress(rbody), enc[1].flush()))
+                if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc):
                   closed = True
                 continue
             if os.path.isfile(apath):
@@ -3524,7 +3617,7 @@ class HTTPRequestHandler(RequestHandler):
                   if not self._send_err_rns():
                     closed = True
                   continue
-              if not self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange):
+              if not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, enc) if enc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange)):
                 closed = True
             else:
               if not self._send_err_nf():
