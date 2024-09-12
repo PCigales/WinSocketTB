@@ -3058,7 +3058,7 @@ class UDPIServer(BaseIServer):
     self.server_address = self.isocket.getsockname()
     if self.multicast_membership:
       if inf[0] == socket.AF_INET6:
-        self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_ADD_MEMBERSHIP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), 0))
+        self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), 0))
       else:
         self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
 
