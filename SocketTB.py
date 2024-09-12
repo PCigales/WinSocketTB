@@ -3048,7 +3048,10 @@ class UDPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
-    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
+    f = 0
+    if self.multicast_membership:
+      f = socket.AF_INET6 if ':' in self.multicast_membership else socket.AF_INET
+    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], family=f, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
     self.isocket = self.isocketgen(family=inf[0], type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
     if self.allow_reuse_address or self.multicast_membership:
       self.isocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -3056,11 +3059,10 @@ class UDPIServer(BaseIServer):
       self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
     self.isocket.bind(self.server_address)
     self.server_address = self.isocket.getsockname()
-    if self.multicast_membership:
-      if inf[0] == socket.AF_INET6:
-        self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), 0))
-      else:
-        self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
+    if f == socket.AF_INET:
+      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
+    elif f == socket.AF_INET6:
+      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), inf[4][3]))
 
   def _get_request(self):
     return self.isocket.recvfrom(self.max_packet_size)
@@ -3167,17 +3169,24 @@ class MultiUDPIServer(UDPIServer):
     return tuple(socket.inet_ntoa(e.dwAddr.to_bytes(4, 'little')) for e in t if e.wType & 1)
 
   def _server_initiate(self):
-    self.isockets = tuple(self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP) for addr in self.server_address)
-    for a, addr in enumerate(self.server_address):
+    f = 0
+    if self.multicast_membership:
+      f = socket.AF_INET6 if ':' in self.multicast_membership else socket.AF_INET
+    infs = tuple(socket.getaddrinfo(addr[0] or None, addr[1], family=f, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0] for addr in self.server_address)
+    self.isockets = tuple(self.isocketgen(family=inf[0], type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP) for addr, inf in zip(self.server_address, infs))
+    for a, (addr, inf) in enumerate(zip(self.server_address, infs)):
       if self.allow_reuse_address or self.multicast_membership:
         self.isockets[a].setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-      if self.dual_stack:
+      if self.dual_stack and inf[0] == socket.AF_INET6:
         self.isockets[a].setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
       self.isockets[a].bind(addr)
     self.server_address = tuple(isock.getsockname() for isock in self.isockets)
-    if self.multicast_membership:
+    if f == socket.AF_INET:
       for a, addr in enumerate(self.server_address):
         self.isockets[a].setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(addr[0])))
+    elif f == socket.AF_INET6:
+      for a, addr in enumerate(self.server_address):
+        self.isockets[a].setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), inf[4][3]))
 
   def _get_request(self, isocket):
     return isocket.recvfrom(self.max_packet_size, timeout=0)
