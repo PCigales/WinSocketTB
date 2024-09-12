@@ -1,4 +1,4 @@
-# SocketTB v1.2.1 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.3.0 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -3048,15 +3048,19 @@ class UDPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
-    self.isocket = self.isocketgen(type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
+    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
+    self.isocket = self.isocketgen(family=inf[0], type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
     if self.allow_reuse_address or self.multicast_membership:
       self.isocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    if self.dual_stack:
+    if self.dual_stack and inf[0] == socket.AF_INET6:
       self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
     self.isocket.bind(self.server_address)
     self.server_address = self.isocket.getsockname()
     if self.multicast_membership:
-      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
+      if inf[0] == socket.AF_INET6:
+        self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_ADD_MEMBERSHIP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), 0))
+      else:
+        self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
 
   def _get_request(self):
     return self.isocket.recvfrom(self.max_packet_size)
@@ -3089,14 +3093,15 @@ class TCPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
-    self.isocket = self.isocketgen(type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)[0]
+    self.isocket = self.isocketgen(family=inf[0], type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     if self.nssl_context:
       self.isocket = self.nssl_context.wrap_socket(self.isocket, server_side=True)
     if self.allow_reuse_address:
       self.isocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    if self.dual_stack:
+    if self.dual_stack and inf[0] == socket.AF_INET6:
       self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    self.isocket.bind(self.server_address)
+    self.isocket.bind(inf[4])
     self.server_address = self.isocket.getsockname()
     self.isocket.listen(self.request_queue_size)
 
@@ -3227,8 +3232,10 @@ class MultiUDPIDAltServer(MixinIDAltServer, MultiUDPIServer):
 class HTTPRequestHandler(RequestHandler):
   _mimetypes = mimetypes.MimeTypes(strict=False)
   _mimetypes.read_windows_registry(strict=False)
-  _mimetypes.encodings_map= {}
+  _mimetypes.encodings_map = {}
   _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
+  _encodings = ({'identity': 50, '*': 75}, ({'deflate': 0, 'gzip': 1, 'br': 2, 'identity': 50, '*': 75} if brotli else {'deflate': 0, 'gzip': 1, 'identity': 50, '*': 75}))
+  _encode_mimetypes = ({'example', 'text', 'message', 'font'}, {'application/javascript', 'application/ecmascript', 'application/x-ecmascript', 'application/x-javascript', 'application/x-sh', 'application/x-csh', 'application/json', 'application/ld+json', 'application/manifest+json', 'application/vnd.api+json', 'application/rtf', 'application/xml', 'application/xhtml+xml', 'application/atom+xml', 'application/rss+xml', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/font-sfnt', 'application/vnd.ms-fontobject', 'application/xfont-ttf', 'application/xfont-opentype', 'application/xfont-truetype', 'application/wasm', 'application/x-httpd-php', 'application/x-httpd-python', 'application/n-quads', 'application/n-triples', 'application/postscript', 'application/x-python-code', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon', 'multipart/form-data'})
 
   class _BrotliCompressor:
     def __init__(self):
@@ -3239,46 +3246,56 @@ class HTTPRequestHandler(RequestHandler):
       return self.compressor.finish()
 
   @classmethod
-  def _set_enc(cls, aenc, fid=False):
-    enc = 'identity'
-    if aenc is not None:
-      aenc = aenc.lower().split(',')
-      for i in range(len(aenc)):
-        ae = aenc[i].split(';')
-        if len(ae) == 1:
+  def _set_enc(cls, aenc, mt='text', fid=False):
+    if aenc is None:
+      return False
+    aenc = aenc.lower().split(',')
+    for i in range(len(aenc)):
+      ae = aenc[i].split(';')
+      if len(ae) == 1:
+        aenc[i] = (ae[0].strip(), 1)
+      else:
+        aeq = ae[1].split('=')
+        try:
+          if aeq[0].strip() == 'q':
+            aenc[i] = (ae[0].strip(), min(max(float(aeq[1].strip()), 0), 1))
+          else:
+            raise
+        except:
           aenc[i] = (ae[0].strip(), 1)
-        else:
-          aeq = ae[1].split('=')
-          try:
-            if aeq[0].strip() == 'q':
-              aenc[i] = (ae[0].strip(), min(max(float(aeq[1].strip()), 0), 1))
-            else:
-              raise
-          except:
-            aenc[i] = (ae[0].strip(), 1)
-      senc = {'identity': 3} if fid else ({'deflate': 0, 'gzip': 1, 'br': 2, 'identity': 3} if brotli else {'deflate': 0, 'gzip': 1, 'identity': 3})
+    pid = True
+    if not fid:
+      if mt in cls._encode_mimetypes[1]:
+        pid = False
+      else:
+        t, s = mt.partition('/')[::2]
+        if t in cls._encode_mimetypes[0]:
+          pid = False
+    while True:
+      senc = cls._encodings[0 if pid else 1]
       aenc.sort(key=lambda ae:senc.get(ae[0], 100))
       aenc.sort(key=lambda ae:ae[1], reverse=True)
       for ae in aenc:
+        enc = senc.get(ae[0])
         if ae[1] > 0:
-          if ae[0] == '*':
-            break
-          if ae[0] in senc:
-            enc = ae[0]
-            break
-        elif ae[0] in ('identity', '*'):
-          enc = None
+          if enc == 75:
+            return False if pid else ('deflate', zlib.compressobj(wbits=15))
+          elif enc == 0:
+            return 'deflate', zlib.compressobj(wbits=15)
+          elif enc == 1:
+            return 'gzip', zlib.compressobj(wbits=31)
+          elif enc == 2:
+            return 'br', cls._BrotliCompressor()
+          elif enc == 50:
+            return False
+        elif enc in (50, 75):
           break
-      if enc == 'deflate':
-        return 'deflate', zlib.compressobj(wbits=15)
-      elif enc == 'gzip':
-        return 'gzip', zlib.compressobj(wbits=31)
-      elif enc == 'br':
-        return 'br', cls._BrotliCompressor()
-      elif enc == 'identity':
-        return False
       else:
+        return False
+      if fid or not pid:
         return None
+      else:
+        pid = False
 
   def _send(self, h, bo=None, bsize=None, brange=None):
     try:
@@ -3393,7 +3410,7 @@ class HTTPRequestHandler(RequestHandler):
       return True
     except:
       return False
-  
+
   def _send_nm(self):
     resp = \
       'HTTP/1.1 304 Not Modified\r\n' \
@@ -3555,11 +3572,6 @@ class HTTPRequestHandler(RequestHandler):
             continue
         if req.method != 'PUT':
           f = None
-          enc = self._set_enc(req.header('Accept-Encoding'), bool(rrange))
-          if enc is None:
-            if not self._send_err_na():
-              closed = True
-            continue
           try:
             if os.path.isdir(apath):
               if not rpath.endswith('/'):
@@ -3575,6 +3587,11 @@ class HTTPRequestHandler(RequestHandler):
                 except:
                   pass
               else:
+                enc = self._set_enc(req.header('Accept-Encoding'), 'text/html', bool(rrange))
+                if enc is None:
+                  if not self._send_err_na():
+                    closed = True
+                  continue
                 rbody = self._html_from_dir(apath, rpath, osort, bool(self.server.max_upload))
                 if rrange:
                   try:
@@ -3592,6 +3609,11 @@ class HTTPRequestHandler(RequestHandler):
                 continue
             if os.path.isfile(apath):
               btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
+              enc = self._set_enc(req.header('Accept-Encoding'), btype, bool(rrange))
+              if enc is None:
+                if not self._send_err_na():
+                  closed = True
+                continue
               f = open(apath, 'rb')
               fs = os.stat(f.fileno())
               if req.header('If-None-Match') is None:
@@ -3710,9 +3732,9 @@ class HTTPRequestHandler(RequestHandler):
 
 class HTTPServer(TCPIServer):
 
-  def __init__(self, server_address, root_directory=None, max_upload_length=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
+  def __init__(self, server_address, root_directory=None, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.root = os.path.abspath(root_directory or os.getcwd())
-    self.max_upload = max_upload_length
+    self.max_upload = max_upload_size
     super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
 
 
