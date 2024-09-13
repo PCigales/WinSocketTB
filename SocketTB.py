@@ -472,9 +472,6 @@ class ISocketGenerator:
   def __call__(self, *args, **kwargs):
     return self.new(*args, **kwargs) if not args or not isinstance(args[0], socket.socket) else self.wrap(args[0])
 
-  def socket(self, family=-1, type=-1, proto=-1):
-    return self.new(family, type, proto)
-
   def close(self):
     with self.lock:
       self.closed = True
@@ -522,10 +519,32 @@ class ISocketGenerator:
         rt = timeout + t - time.monotonic()
     raise err if err is not None else socket.gaierror()
 
+  def create_server(self, address, family=socket.AF_INET, backlog=None, reuse_port=False, dualstack_ipv6=False, type=socket.SOCK_STREAM):
+    res = socket.getaddrinfo(address[0], address[1], family=family, type=type, flags=socket.AI_PASSIVE)[0]
+    isock = self.new(*res[:3])
+    try:
+      if reuse_port:
+        isock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+      if dualstack_ipv6 and res[0] == socket.AF_INET6:
+        isock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+      isock.bind(res[4])
+      if type == socket.SOCK_STREAM:
+        if backlog is None:
+          isock.listen()
+        elif backlog is not False:
+          isock.listen(backlog)
+      return isock
+    except Exception as err:
+      isock.close()
+      raise err
+
   def waitany(self, timeout, event):
     if not event in ('r', 'a', 'w', 'c') or self.closed:
       return ()
     return ISocket.waitmult(timeout, *(isock for isock, activ in self.isockets.items() if activ), event=event, reset_event=False)
+
+  def socket(self, family=-1, type=-1, proto=-1):
+    return self.new(family, type, proto)
 
 
 class _BIDSocket(ISocket):
@@ -2940,6 +2959,8 @@ class BaseIServer:
     return object.__new__(cls)
 
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, threaded=False, daemon_thread=False):
+    if isinstance(server_address, int):
+      server_address = (None, server_address)
     self.server_address = server_address
     self.request_handler_class = request_handler_class
     self.allow_reuse_address = allow_reuse_address
@@ -3050,19 +3071,14 @@ class UDPIServer(BaseIServer):
   def _server_initiate(self):
     f = 0
     if self.multicast_membership:
-      f = socket.AF_INET6 if ':' in self.multicast_membership else socket.AF_INET
-    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], family=f, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
-    self.isocket = self.isocketgen(family=inf[0], type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP)
-    if self.allow_reuse_address or self.multicast_membership:
-      self.isocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    if self.dual_stack and inf[0] == socket.AF_INET6:
-      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    self.isocket.bind(self.server_address)
+      m = socket.getaddrinfo(self.multicast_membership, self.server_address[1], type=socket.SOCK_DGRAM)[0]
+      f = m[0]
+    self.isocket = self.isocketgen.create_server(self.server_address, family=f, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM)
     self.server_address = self.isocket.getsockname()
     if f == socket.AF_INET:
-      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(self.server_address[0])))
+      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(m[4][0]), socket.inet_aton(self.server_address[0])))
     elif f == socket.AF_INET6:
-      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), inf[4][3]))
+      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), self.server_address[3]))
 
   def _get_request(self):
     return self.isocket.recvfrom(self.max_packet_size)
@@ -3095,15 +3111,9 @@ class TCPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
-    inf = socket.getaddrinfo(self.server_address[0] or None, self.server_address[1], type=socket.SOCK_STREAM, flags=socket.AI_PASSIVE)[0]
-    self.isocket = self.isocketgen(family=inf[0], type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+    self.isocket = self.isocketgen.create_server(self.server_address, family=0, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack)
     if self.nssl_context:
       self.isocket = self.nssl_context.wrap_socket(self.isocket, server_side=True)
-    if self.allow_reuse_address:
-      self.isocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    if self.dual_stack and inf[0] == socket.AF_INET6:
-      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-    self.isocket.bind(inf[4])
     self.server_address = self.isocket.getsockname()
     self.isocket.listen(self.request_queue_size)
 
@@ -3139,7 +3149,7 @@ class RequestHandler:
   def handle(self):
     closed = False
     while not closed and not self.server.closed:
-      print(self.address, self.request)
+      print(self.address, self.request, self.client_address)
       req = HTTPMessage(self.request, max_length=1073741824)
       if self.server.closed:
         break
@@ -3171,22 +3181,16 @@ class MultiUDPIServer(UDPIServer):
   def _server_initiate(self):
     f = 0
     if self.multicast_membership:
-      f = socket.AF_INET6 if ':' in self.multicast_membership else socket.AF_INET
-    infs = tuple(socket.getaddrinfo(addr[0] or None, addr[1], family=f, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0] for addr in self.server_address)
-    self.isockets = tuple(self.isocketgen(family=inf[0], type=socket.SOCK_DGRAM, proto=socket.IPPROTO_UDP) for addr, inf in zip(self.server_address, infs))
-    for a, (addr, inf) in enumerate(zip(self.server_address, infs)):
-      if self.allow_reuse_address or self.multicast_membership:
-        self.isockets[a].setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-      if self.dual_stack and inf[0] == socket.AF_INET6:
-        self.isockets[a].setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-      self.isockets[a].bind(addr)
+      m = socket.getaddrinfo(self.multicast_membership, None, type=socket.SOCK_DGRAM)[0]
+      f = m[0]
+    self.isockets = tuple(self.isocketgen.create_server(addr, family=f, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in self.server_address)
     self.server_address = tuple(isock.getsockname() for isock in self.isockets)
     if f == socket.AF_INET:
-      for a, addr in enumerate(self.server_address):
-        self.isockets[a].setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership), socket.inet_aton(addr[0])))
+      for isock, addr in zip(self.isockets, self.server_address):
+        isock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(m[4][0]), socket.inet_aton(addr[0])))
     elif f == socket.AF_INET6:
-      for a, addr in enumerate(self.server_address):
-        self.isockets[a].setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership), inf[4][3]))
+      for isock, addr in zip(self.isockets, self.server_address):
+        isock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), addr[3]))
 
   def _get_request(self, isocket):
     return isocket.recvfrom(self.max_packet_size, timeout=0)
