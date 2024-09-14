@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
+__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -3044,6 +3044,13 @@ class BaseIServer:
   def stop(self, block_on_close=True):
     self.shutdown()
 
+  def __enter__(self):
+    self.start()
+    return self 
+
+  def __exit__(self, et, ev, tb):
+    self.stop()
+
 
 class MixinIDServer:
 
@@ -3743,7 +3750,7 @@ class HTTPRequestHandler(RequestHandler):
           closed = True
 
 
-class HTTPServer(TCPIServer):
+class HTTPIServer(TCPIServer):
 
   def __init__(self, server_address, root_directory=None, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.root = os.path.abspath(root_directory or os.getcwd())

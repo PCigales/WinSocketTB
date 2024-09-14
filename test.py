@@ -5,6 +5,7 @@ import base64
 import os
 import threading
 import time
+import locale
 
 with ISocketGenerator() as IGen:
   ISock0 = IGen(family=socket.AF_INET, type=socket.SOCK_STREAM)
@@ -147,6 +148,26 @@ with IDSocketGenerator() as IDGen:
   print(rep.body(20))
   pcon[0].shutclose()
 
+with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), IDAltSocketGenerator() as IDGen:
+  IDSock0 = IDGen(family=socket.AF_INET)
+  IDSock0.connect(('127.0.0.1', 9000))
+  IDSock0.send(b'OPTIONS * HTTP/1.1\r\nHost: 127.0.0.1:9000\r\n\r\n')
+  print(IDSock0.recv(1024))
+  IDSock0.close()
+  IDSock0 = IDGen(family=socket.AF_INET6)
+  IDSock0.connect(('[::1]', 9000))
+  IDSock0.send(b'OPTIONS * HTTP/1.1\r\nHost: [::1]:9000\r\n\r\n')
+  print(IDSock0.recv(1024))
+  IDSock0.close()
+  HTTPRequest = HTTPRequestConstructor(IDGen)
+  pcon = []
+  print(HTTPRequest('*', method='OPTIONS', pconnection=pcon))
+  print(HTTPRequest('http://localhost:9000/', pconnection=pcon))
+  print(pcon)
+  print(HTTPRequest('http://localhost:9000/test.txt', method='PUT', data=b'0' * 11, pconnection=pcon))
+  print(pcon)
+
+locale.setlocale(locale.LC_TIME, '')
 with NTPClient('time.google.com') as ntpc:
   print(ntpc.get_time(to_local=True))
   print(ntpc.get_offset())
