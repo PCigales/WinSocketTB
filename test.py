@@ -1,5 +1,4 @@
 from SocketTB import *
-import socket
 import ssl
 import base64
 import os
@@ -108,11 +107,18 @@ with IDSocketGenerator() as IDGen:
   IDSock2SS.shutclose()
 print(IDSock0SS, IDSock1SS, IDSock2SS)
 
-UDPServer = MultiUDPIServer(1900, RequestHandler, True, '239.255.255.250')
+UDPServer = MultiUDPIServer(1900, RequestHandler, True, ('239.255.255.250', 'ff02::c'))
 UDPServer.start()
 with ISocketGenerator() as IGen:
   ISock0 = IGen(family=socket.AF_INET, type=socket.SOCK_DGRAM)
-  ISock0.sendto(b'test', ('239.255.255.250', 1900))
+  ISock0.sendto(b'test ipv4', ('239.255.255.250', 1900))
+  ISock0.close()
+  ISock0 = IGen(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
+  ISock0.sendto(b'test ipv6', ('ff02::c', 1900))
+  ISock0.close()
+  ISock0 = IGen(family=socket.AF_INET6, type=socket.SOCK_DGRAM)
+  ISock0.bind(('::1',0))
+  ISock0.sendto(b'test ipv6 lb', ('ff02::c', 1900))
 time.sleep(2)
 UDPServer.shutdown()
 
@@ -164,7 +170,7 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   print(HTTPRequest('*', method='OPTIONS', pconnection=pcon))
   print(HTTPRequest('http://localhost:9000/', pconnection=pcon))
   print(pcon)
-  print(HTTPRequest('http://localhost:9000/test.txt', method='PUT', data=b'0' * 11, pconnection=pcon))
+  print(HTTPRequest('http://localhost:9000/nul', method='PUT', data=b'0' * 11, pconnection=pcon))
   print(pcon)
 
 locale.setlocale(locale.LC_TIME, '')

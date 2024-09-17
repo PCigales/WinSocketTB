@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -42,25 +42,35 @@ ncrypt = ctypes.WinDLL('ncrypt', use_last_error=True)
 kernel32 = ctypes.WinDLL('kernel32',  use_last_error=True)
 shlwapi = ctypes.WinDLL('shlwapi', use_last_error=True)
 byref = ctypes.byref
+BYTE = ctypes.wintypes.BYTE
 INT = ctypes.wintypes.INT
 UINT = ctypes.wintypes.UINT
 LONG = ctypes.wintypes.LONG
 ULONG = ctypes.wintypes.ULONG
 WORD = ctypes.wintypes.WORD
+SHORT = ctypes.wintypes.SHORT
 USHORT = ctypes.wintypes.USHORT
 DWORD = ctypes.wintypes.DWORD
 ULONG = ctypes.wintypes.ULONG
+ULARGE_INTEGER = ctypes.wintypes.ULARGE_INTEGER
 BOOL = ctypes.wintypes.BOOL
 PVOID = ctypes.c_void_p
 SOCKET  = PVOID
 WSAEVENT = PVOID
 HANDLE = ctypes.wintypes.HANDLE
+LPCSTR = ctypes.wintypes.LPCSTR
+WCHAR = ctypes.wintypes.WCHAR
 LPCWSTR = ctypes.wintypes.LPCWSTR
 LPWSTR = ctypes.wintypes.LPWSTR
 LPVOID = ctypes.wintypes.LPVOID
 LPCVOID = ctypes.wintypes.LPCVOID
+PSHORT = ctypes.wintypes.PSHORT
+PULONG = ctypes.wintypes.PULONG
 POINTER = ctypes.POINTER
 STRUCTURE = ctypes.Structure
+BIGENDIANUNION = ctypes.BigEndianUnion
+UNION = ctypes.Union
+GUID = BYTE * 16
 WinError = ctypes.WinError
 ClosedError = lambda: WinError(10038)
 AlreadyError = lambda: WinError(10037)
@@ -68,11 +78,82 @@ ConResetError = lambda: WinError(10054)
 
 class WSANETWORKEVENTS(STRUCTURE):
   _fields_ = [('lNetworkEvents', LONG), ('iErrorCode', INT*10)]
+
 class MIB_IPADDRROW(STRUCTURE):
-  _fields_=[('dwAddr', DWORD), ('dwIndex', DWORD), ('dwMask', DWORD), ('dwBCastAddr', DWORD), ('dwReasmSize', DWORD), ('unused', USHORT), ('wType', USHORT)]
+  _fields_ = [('dwAddr', DWORD), ('dwIndex', DWORD), ('dwMask', DWORD), ('dwBCastAddr', DWORD), ('dwReasmSize', DWORD), ('unused', USHORT), ('wType', USHORT)]
 class MIB_IPADDRTABLE(STRUCTURE):
   _fields_ = [('dwNumEntries', DWORD), ('table', MIB_IPADDRROW*0)]
 P_MIB_IPADDRTABLE = POINTER(MIB_IPADDRTABLE)
+
+class IN_PORT(BIGENDIANUNION):
+  _fields_ = [('port', USHORT)]
+class IN_ADDR(BIGENDIANUNION):
+  _fields_ = [('addr_l', ULONG), ('addr_4b', BYTE * 4)]
+class SOCKADDR_IN(STRUCTURE):
+  _anonymous_ = ('port',)
+  _fields_ = [('family', SHORT), ('port', IN_PORT), ('addr', IN_ADDR), ('zero', BYTE * 8)]
+PSOCKADDR_IN = POINTER(SOCKADDR_IN)
+class IN6_ADDR(BIGENDIANUNION):
+  _fields_ = [('addr_8w', USHORT * 8), ('addr_16b', BYTE * 16)]
+class SCOPE_ID_ZONELEVEL(STRUCTURE):
+  _fields_ = [('Zone', ULONG, 24), ('Level', ULONG, 4)]
+class SCOPE_ID(UNION):
+  _anonymous_ = ('ZoneLevel',)
+  _fields_ = [('Value', ULONG), ('ZoneLevel', SCOPE_ID_ZONELEVEL)]
+class IN_FLOWINFO(BIGENDIANUNION):
+  _fields_ = [('flowinfo', ULONG)]
+class SOCKADDR_IN6(STRUCTURE):
+  _anonymous_ = ('port', 'flowinfo')
+  _fields_ = [('family', SHORT), ('port', IN_PORT), ('flowinfo', IN_FLOWINFO), ('addr', IN6_ADDR), ('scope_id', SCOPE_ID)]
+PSOCKADDR_IN6 = POINTER(SOCKADDR_IN6)
+class SOCKET_ADDRESS(STRUCTURE):
+  _fields_ = [('lpSockaddr', PSHORT), ('iSockaddrLength', INT)]
+class IP_ADAPTER_UNICAST_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_UNICAST_ADDRESS = POINTER(IP_ADAPTER_UNICAST_ADDRESS)
+IP_ADAPTER_UNICAST_ADDRESS._fields_ = [('Length', ULONG), ('Flags', DWORD), ('Next', PIP_ADAPTER_UNICAST_ADDRESS), ('Address', SOCKET_ADDRESS), ('PrefixOrigin', INT), ('SuffixOrigin', INT), ('DadState', INT), ('ValidLifetime', ULONG), ('PreferredLifetime', ULONG), ('LeaseLifetime', ULONG), ('OnLinkPrefixLength', BYTE)]
+class IP_ADAPTER_ANICAST_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_ANICAST_ADDRESS = POINTER(IP_ADAPTER_ANICAST_ADDRESS)
+IP_ADAPTER_ANICAST_ADDRESS._fields_ = [('Length', ULONG), ('Flags', DWORD), ('Next', PIP_ADAPTER_ANICAST_ADDRESS), ('Address', SOCKET_ADDRESS)]
+class IP_ADAPTER_MULTICAST_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_MULTICAST_ADDRESS = POINTER(IP_ADAPTER_MULTICAST_ADDRESS)
+IP_ADAPTER_MULTICAST_ADDRESS._fields_ = [('Length', ULONG), ('Flags', DWORD), ('Next', PIP_ADAPTER_MULTICAST_ADDRESS), ('Address', SOCKET_ADDRESS)]
+class IP_ADAPTER_DNS_SERVER_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_DNS_SERVER_ADDRESS = POINTER(IP_ADAPTER_DNS_SERVER_ADDRESS)
+IP_ADAPTER_DNS_SERVER_ADDRESS._fields_ = [('Length', ULONG), ('Reserved', DWORD), ('Next', PIP_ADAPTER_DNS_SERVER_ADDRESS), ('Address', SOCKET_ADDRESS)]
+class FlagsSet(STRUCTURE):
+  _fields_ = [('DdnsEnabled', ULONG, 1), ('RegisterAdapterSuffix', ULONG, 1), ('Dhcpv4Enabled', ULONG, 1), ('ReceiveOnly', ULONG, 1), ('NoMulticast', ULONG, 1), ('Ipv6OtherStatefulConfig', ULONG, 1), ('NetbiosOverTcpipEnabled', ULONG, 1), ('Ipv4Enabled', ULONG, 1), ('Ipv6Enabled', ULONG, 1), ('Ipv6ManagedAddressConfigurationSupported', ULONG, 1)]
+class Flags(UNION):
+  _anonymous_ = ('FlagsSet',)
+  _fields_ = [('Flags', ULONG), ('FlagsSet', FlagsSet)]
+class IP_ADAPTER_PREFIX(STRUCTURE):
+  pass
+PIP_ADAPTER_PREFIX = POINTER(IP_ADAPTER_PREFIX)
+IP_ADAPTER_PREFIX._fields_ = [('Length', ULONG), ('Flage', DWORD), ('Next', PIP_ADAPTER_PREFIX), ('Address', SOCKET_ADDRESS), ('PrefixLength', ULONG)]
+class IP_ADAPTER_WINS_SERVER_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_WINS_SERVER_ADDRESS = POINTER(IP_ADAPTER_WINS_SERVER_ADDRESS)
+IP_ADAPTER_WINS_SERVER_ADDRESS._fields_ = [('Length', ULONG), ('Reserved', DWORD), ('Next', PIP_ADAPTER_WINS_SERVER_ADDRESS), ('Address', SOCKET_ADDRESS)]
+class IP_ADAPTER_GATEWAY_ADDRESS(STRUCTURE):
+  pass
+PIP_ADAPTER_GATEWAY_ADDRESS = POINTER(IP_ADAPTER_GATEWAY_ADDRESS)
+IP_ADAPTER_GATEWAY_ADDRESS._fields_ = [('Length', ULONG), ('Reserved', DWORD), ('Next', PIP_ADAPTER_GATEWAY_ADDRESS), ('Address', SOCKET_ADDRESS)]
+class IF_LUID_INFO(STRUCTURE):
+  _fields_ = [('Reserved', ULARGE_INTEGER, 24), ('NetLuidIndex', ULARGE_INTEGER, 24), ('IfType', ULARGE_INTEGER, 16)]
+class IF_LUID(UNION):
+  _anonymous_ = ('Info',)
+  _fields_ = [('Value', ULARGE_INTEGER), ('Info', IF_LUID_INFO)]
+class IP_ADAPTER_DNS_SUFFIX(STRUCTURE):
+  pass
+PIP_ADAPTER_DNS_SUFFIX = POINTER(IP_ADAPTER_DNS_SUFFIX)
+IP_ADAPTER_DNS_SUFFIX._fields_ = [('Next', PIP_ADAPTER_DNS_SUFFIX), ('String', WCHAR * 256)]
+class IP_ADAPTER_ADDRESSES(STRUCTURE):
+  _anonymous_ = ('Flags',)
+PIP_ADAPTER_ADDRESSES = POINTER(IP_ADAPTER_ADDRESSES)
+IP_ADAPTER_ADDRESSES._fields_ = [('Length', ULONG), ('IfIndex', DWORD), ('Next', PIP_ADAPTER_ADDRESSES), ('AdapterName', LPCSTR), ('FirstUnicastAddress', PIP_ADAPTER_UNICAST_ADDRESS), ('FirstAnycastAddress', PIP_ADAPTER_ANICAST_ADDRESS), ('FirstMulticastAddress', PIP_ADAPTER_MULTICAST_ADDRESS), ('FirstDnsServerAddress', PIP_ADAPTER_DNS_SERVER_ADDRESS), ('DnsSuffix', LPCWSTR), ('Description', LPCWSTR), ('FriendlyName', LPCWSTR), ('PhysicalAddress', BYTE * 8), ('PhysicalAddressLength', ULONG), ('Flags', Flags), ('Mtu', ULONG), ('IfType', DWORD), ('OperStatus', INT), ('Ipv6IfIndex', DWORD), ('ZoneIndices', ULONG * 16), ('FirstPrefix', PIP_ADAPTER_PREFIX), ('TransmitLinkSpeed', ULARGE_INTEGER), ('ReceiveLinkSpeed', ULARGE_INTEGER), ('FirstWinsServerAddress', PIP_ADAPTER_WINS_SERVER_ADDRESS), ('FirstGatewayAddress', PIP_ADAPTER_GATEWAY_ADDRESS), ('Ipv4Metric', ULONG), ('Ipv6Metric', ULONG), ('Luid', IF_LUID), ('Dhcpv4Server', SOCKET_ADDRESS), ('CompartmentId', UINT), ('NetworkGuid', GUID), ('ConnectionType', INT), ('TunnelType', INT), ('Dhcpv6Server', SOCKET_ADDRESS), ('Dhcpv6ClientDuid', BYTE * 130), ('Dhcpv6ClientDuidLength', ULONG), ('Dhcpv6Iaid', ULONG), ('FirstDnsSuffix', PIP_ADAPTER_DNS_SUFFIX)]
 
 class CRYPT_KEY_PROV_INFO(STRUCTURE):
   _fields_ = [('pwszContainerName', LPWSTR), ('pwszProvName', LPWSTR), ('dwProvType', DWORD), ('dwFlags', DWORD), ('cProvParam', DWORD), ('rgProvParam', PVOID), ('dwKeySpec', DWORD)]
@@ -2959,8 +3040,6 @@ class BaseIServer:
     return object.__new__(cls)
 
   def __init__(self, server_address, request_handler_class, allow_reuse_address=False, dual_stack=True, threaded=False, daemon_thread=False):
-    if isinstance(server_address, int):
-      server_address = (None, server_address)
     self.server_address = server_address
     self.request_handler_class = request_handler_class
     self.allow_reuse_address = allow_reuse_address
@@ -3032,7 +3111,7 @@ class BaseIServer:
 
   def shutdown(self, block_on_close=True):
     with self.lock:
-      if self.closed:
+      if self.closed is None or self.closed:
         return
       self.closed = True
     self._server_close()
@@ -3050,6 +3129,70 @@ class BaseIServer:
 
   def __exit__(self, et, ev, tb):
     self.stop()
+
+  @staticmethod
+  def retrieve_ipv4s():
+    s = ULONG(0)
+    while True:
+      b = ctypes.create_string_buffer(s.value)
+      r = iphlpapi.GetIpAddrTable(b, byref(s), BOOL(False))
+      if r == 0:
+        break
+      elif r != 122:
+        return ()
+    if s.value == 0:
+      return ()
+    r = ctypes.cast(b, P_MIB_IPADDRTABLE).contents
+    n = r.dwNumEntries
+    t = ctypes.cast(byref(r.table), POINTER(MIB_IPADDRROW * n)).contents
+    return tuple(socket.inet_ntoa(e.dwAddr.to_bytes(4, 'little')) for e in t if e.wType & 1)
+
+  @staticmethod
+  def retrieve_ips(ipv4=True, ipv6=True):
+    if ipv4:
+      f = 0 if ipv6 else socket.AF_INET
+    elif ipv6:
+      f = socket.AF_INET6
+    else:
+      return []
+    f = ULONG(f)
+    s = ULONG(0)
+    while True:
+      b = ctypes.create_string_buffer(s.value)
+      r = iphlpapi.GetAdaptersAddresses(f, ULONG(14), None, b, byref(s))
+      if r == 0:
+        break
+      elif r != 111:
+        return []
+    if s.value == 0:
+      return []
+    ips = []
+    paa = ctypes.cast(b, PIP_ADAPTER_ADDRESSES)
+    while paa:
+      if ctypes.cast(paa, PULONG).contents.value < ctypes.sizeof(IP_ADAPTER_ADDRESSES):
+        return []
+      aa = paa.contents
+      paa = aa.Next
+      if aa.OperStatus != 1:
+        continue
+      pa = aa.FirstUnicastAddress
+      while pa:
+        if ctypes.cast(pa, PULONG).contents.value < ctypes.sizeof(pa._type_):
+          break
+        a = pa.contents
+        pa = a.Next
+        if a.Flags == 2:
+          continue
+        ad = a.Address
+        if ad.iSockaddrLength < ctypes.sizeof(ad.lpSockaddr._type_):
+          continue
+        f = ad.lpSockaddr.contents.value
+        if f == socket.AF_INET:
+          ips.append((aa.IfIndex, socket.inet_ntoa(ctypes.cast(ad.lpSockaddr, PSOCKADDR_IN).contents.addr.addr_4b)))
+        elif f == socket.AF_INET6:
+          ad = ctypes.cast(ad.lpSockaddr, PSOCKADDR_IN6).contents
+          ips.append((aa.Ipv6IfIndex, '%s%s' % (socket.inet_ntop(f, ad.addr.addr_8w), ('%%%d' % ad.scope_id.Zone if ad.scope_id.Zone else ''))))
+    return ips
 
 
 class MixinIDServer:
@@ -3078,14 +3221,21 @@ class UDPIServer(BaseIServer):
   def _server_initiate(self):
     f = 0
     if self.multicast_membership:
-      m = socket.getaddrinfo(self.multicast_membership, self.server_address[1], type=socket.SOCK_DGRAM)[0]
-      f = m[0]
+      self.multicast_membership = socket.getaddrinfo(self.multicast_membership, None, type=socket.SOCK_DGRAM)[0]
+      f = self.multicast_membership[0]
+    if isinstance(self.server_address, int):
+      self.server_address = (None, self.server_address)
     self.isocket = self.isocketgen.create_server(self.server_address, family=f, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM)
     self.server_address = self.isocket.getsockname()
     if f == socket.AF_INET:
-      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(m[4][0]), socket.inet_aton(self.server_address[0])))
+      self.isocket.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(self.multicast_membership[4][0]), socket.inet_aton(self.server_address[0])))
     elif f == socket.AF_INET6:
-      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), self.server_address[3]))
+      ai = self.server_address[3]
+      if not ai:
+        a = self.server_address[0]
+        ips = self.retrieve_ips(False, True)
+        ai = next((ip[0] for ip in ips if ip[1] == a), 0)
+      self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership[4][0]), ai))
 
   def _get_request(self):
     return self.isocket.recvfrom(self.max_packet_size)
@@ -3118,6 +3268,8 @@ class TCPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
+    if isinstance(self.server_address, int):
+      self.server_address = (None, self.server_address)
     self.isocket = self.isocketgen.create_server(self.server_address, family=0, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack)
     if self.nssl_context:
       self.isocket = self.nssl_context.wrap_socket(self.isocket, server_side=True)
@@ -3169,35 +3321,33 @@ class RequestHandler:
 
 class MultiUDPIServer(UDPIServer):
 
-  def __init__(self, server_address, request_handler_class, allow_reuse_address=False, multicast_membership=None, dual_stack=True, max_packet_size=65507, threaded=False, daemon_thread=False):
-    if isinstance(server_address, int):
-      server_address = tuple((ip, server_address) for ip in MultiUDPIServer.retrieve_ips())
-    super().__init__(server_address, request_handler_class, allow_reuse_address, multicast_membership, dual_stack, max_packet_size, threaded, daemon_thread)
-
-  @staticmethod
-  def retrieve_ips():
-    s = ULONG(0)
-    b = ctypes.create_string_buffer(s.value)
-    while iphlpapi.GetIpAddrTable(b, byref(s), False) == 122:
-      b = ctypes.create_string_buffer(s.value)
-    r = ctypes.cast(b, P_MIB_IPADDRTABLE).contents
-    n = r.dwNumEntries
-    t = ctypes.cast(byref(r.table), POINTER(MIB_IPADDRROW * n)).contents
-    return tuple(socket.inet_ntoa(e.dwAddr.to_bytes(4, 'little')) for e in t if e.wType & 1)
-
   def _server_initiate(self):
-    f = 0
     if self.multicast_membership:
-      m = socket.getaddrinfo(self.multicast_membership, None, type=socket.SOCK_DGRAM)[0]
-      f = m[0]
-    self.isockets = tuple(self.isocketgen.create_server(addr, family=f, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in self.server_address)
-    self.server_address = tuple(isock.getsockname() for isock in self.isockets)
-    if f == socket.AF_INET:
-      for isock, addr in zip(self.isockets, self.server_address):
-        isock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(m[4][0]), socket.inet_aton(addr[0])))
-    elif f == socket.AF_INET6:
-      for isock, addr in zip(self.isockets, self.server_address):
-        isock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), addr[3]))
+      if isinstance(self.multicast_membership, str):
+        self.multicast_membership = (self.multicast_membership,)
+        self.server_address = (self.server_address,)
+      elif isinstance(self.server_address, int):
+        self.server_address = (self.server_address,) * len(self.multicast_membership)
+      self.multicast_membership = tuple(socket.getaddrinfo(m, None, type=socket.SOCK_DGRAM)[0] for m in self.multicast_membership)
+      ips = {}
+      self.server_address = tuple(tuple((ip[1], a) for ip in (e[1] for e in enumerate(ips[m[0]] if m[0] in ips else ips.setdefault(m[0], self.retrieve_ips(m[0] == socket.AF_INET, m[0] == socket.AF_INET6))) if e[0] == 0 or e[1][0] != ips[m[0]][e[0] - 1][0])) if isinstance(a, int) else a for a, m in zip(self.server_address, self.multicast_membership))
+      self.isockets = tuple(tuple(self.isocketgen.create_server(addr, family=m[0], backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in a) for a, m in zip(self.server_address, self.multicast_membership))
+      self.server_address = tuple(tuple(isock.getsockname() for isock in i) for i in self.isockets)
+      for i, a, m in zip(self.isockets, self.server_address, self.multicast_membership):
+        if m[0] == socket.AF_INET:
+          for isock, addr in zip(i, a):
+            isock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4s4s', socket.inet_aton(m[4][0]), socket.inet_aton(addr[0])))
+        elif m[0] == socket.AF_INET6:
+          for isock, addr in zip(i, a):
+            ai = addr[3]
+            if not ai:
+              ai = next((ip[0] for ip in (ips[socket.AF_INET6] if socket.AF_INET6 in ips else ips.setdefault(socket.AF_INET6, self.retrieve_ips(False, True))) if ip[1] == addr[0]), 0)
+            isock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), ai))
+    else:
+      if isinstance(self.server_address, int):
+        self.server_address = tuple((ip[1], self.server_address) for ip in MultiUDPIServer.retrieve_ips())
+      self.isockets = tuple(self.isocketgen.create_server(addr, family=0, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in self.server_address)
+      self.server_address = tuple(isock.getsockname() for isock in self.isockets)
 
   def _get_request(self, isocket):
     return isocket.recvfrom(self.max_packet_size, timeout=0)
