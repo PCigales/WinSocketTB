@@ -3234,7 +3234,7 @@ class UDPIServer(BaseIServer):
       if not ai:
         a = self.server_address[0]
         ips = self.retrieve_ips(False, True)
-        ai = next((ip[0] for ip in ips if ip[1] == a), 0)
+        ai = next((ip[0] for ip in ips if ip[1] == a), next((ip[0] for ip in ips if ip[1].rsplit('%', 1)[0] == a), 0))
       self.isocket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, self.multicast_membership[4][0]), ai))
 
   def _get_request(self):
@@ -3341,7 +3341,7 @@ class MultiUDPIServer(UDPIServer):
           for isock, addr in zip(i, a):
             ai = addr[3]
             if not ai:
-              ai = next((ip[0] for ip in (ips[socket.AF_INET6] if socket.AF_INET6 in ips else ips.setdefault(socket.AF_INET6, self.retrieve_ips(False, True))) if ip[1] == addr[0]), 0)
+              ai = next((ip[0] for ip in (ips[socket.AF_INET6] if socket.AF_INET6 in ips else ips.setdefault(socket.AF_INET6, self.retrieve_ips(False, True))) if ip[1] == addr[0]), next((ip[0] for ip in ips[socket.AF_INET6] if ip[1].rsplit('%', 1)[0] == addr[0]), 0))
             isock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, struct.pack('16sL', socket.inet_pton(socket.AF_INET6, m[4][0]), ai))
     else:
       if isinstance(self.server_address, int):
