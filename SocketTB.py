@@ -506,7 +506,7 @@ class ISocket(socket.socket, metaclass=_ISocketMeta):
 
   @classmethod
   def waitmult(cls, timeout, *isocks, event=None, reset_event=False):
-    if not event in ('None', 'r', 'a', 'w', 'c'):
+    if event not in ('None', 'r', 'a', 'w', 'c'):
       return ()
     t = time.monotonic()
     rt = timeout
@@ -620,7 +620,7 @@ class ISocketGenerator:
       raise err
 
   def waitany(self, timeout, event):
-    if not event in ('r', 'a', 'w', 'c') or self.closed:
+    if event not in ('r', 'a', 'w', 'c') or self.closed:
       return ()
     return ISocket.waitmult(timeout, *(isock for isock, activ in self.isockets.items() if activ), event=event, reset_event=False)
 
@@ -1141,7 +1141,7 @@ class IDAltSocket(_BIDSocket):
 
   @classmethod
   def waitmult(cls, timeout, *idsocks, event=None, reset_event=False):
-    if not event in ('r', 'a', 'w', 'c'):
+    if event not in ('r', 'a', 'w', 'c'):
       return ()
     rt = timeout
     uls = []
@@ -1205,7 +1205,7 @@ class IDSocketGenerator(ISocketGenerator):
     self.events = {m: None for m in ('r', 'a', 'w', 'c')}
 
   def waitany(self, timeout, event):
-    if not event in ('r', 'a', 'w', 'c') or self.closed:
+    if event not in ('r', 'a', 'w', 'c') or self.closed:
       return ()
     with self.lock:
       if self.events[event] is not None:
@@ -1230,7 +1230,7 @@ class IDAltSocketGenerator(IDSocketGenerator):
   CLASS = IDAltSocket
 
   def waitany(self, timeout, event):
-    if not event in ('r', 'a', 'w', 'c') or self.closed:
+    if event not in ('r', 'a', 'w', 'c') or self.closed:
       return ()
     return IDSocket.waitmult(timeout, *(idsock for idsock, activ in self.idsockets.items() if activ), event=event, reset_event=False)
 
@@ -1979,11 +1979,11 @@ class HTTPExplodedMessage:
               continue
             if cd is None and can.lower() == 'domain' and cav:
               cav = cav.lstrip('.').lower()
-              if (domain != cav) if dom_ip else (not domain[-len(cav) - 1 :] in (cav, '.' + cav)):
+              if (domain != cav) if dom_ip else (domain[-len(cav) - 1 :] not in (cav, '.' + cav)):
                 raise
               cd = (cav, True)
             if cp is None and can.lower() == 'path':
-              if not path[: len(cav) + (1 if cav[-1:] != '/' else 0)] in (cav, cav + '/'):
+              if path[: len(cav) + (1 if cav[-1:] != '/' else 0)] not in (cav, cav + '/'):
                 raise
               cp = cav
           if cd is None:
@@ -2029,7 +2029,7 @@ class HTTPMessage:
         header_name = header_name.strip().title()
         if header_name:
           header_value = header_value.strip()
-          if not header_name in ('Content-Length', 'Location', 'Host') and http_message.headers.get(header_name):
+          if header_name not in ('Content-Length', 'Location', 'Host') and http_message.headers.get(header_name):
             if header_value:
               http_message.headers[header_name] += ('\n' if header_name in ('Set-Cookie', 'Www-Authenticate', 'Proxy-Authenticate') else ', ') + header_value
           else:
@@ -2205,9 +2205,9 @@ class HTTPMessage:
           except:
             return http_message.clear()
       if decompress and body_len != 0:
-        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
+        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if e not in ('chunked', '', 'identity')]
         for ce in hce:
-          if not ce in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
+          if ce not in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
             if http_message.method is not None and iss:
               try:
                 write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
@@ -2462,9 +2462,9 @@ class HTTPStreamMessage(HTTPMessage):
             except:
               return http_message.clear()
       if decompress and body_len != 0:
-        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if not e in ('chunked', '', 'identity')]
+        hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if e not in ('chunked', '', 'identity')]
         for ce in hce:
-          if not ce in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
+          if ce not in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
             if http_message.method is not None and iss:
               try:
                 write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
@@ -2795,10 +2795,10 @@ class _HTTPBaseRequest:
       headers = {k: v for k, v in hitems if not k.lower() in ('host', 'content-length', 'connection', 'expect')}
       if hexp:
         headers['Expect'] = '100-continue'
-      if not 'accept-encoding' in (k.lower() for k, v in hitems):
+      if 'accept-encoding' not in (k.lower() for k, v in hitems):
         headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip') if decompress else 'identity'
       if data is not None:
-        if not 'chunked' in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
+        if 'chunked' not in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
           headers['Content-Length'] = str(len(data))
       headers['Connection'] = 'close' if hccl else 'keep-alive'
       hauth = headers.get('Authorization')
@@ -2823,7 +2823,7 @@ class _HTTPBaseRequest:
           path = path.rstrip('/') if (path != '/' and path[:1] == '/') else '/'
           for k, v in cook.items():
             if ((domain[-len(k[0][0]) - 1 :] in (k[0][0], '.' + k[0][0])) if (k[0][1] and not dom_ip) else (domain == k[0][0])) and path[: len(k[1]) + (1 if k[1][-1:] != '/' else 0)] in (k[1], k[1] + '/'):
-              if (not k[2] in ck) or (len(k[0][0]) > len(ck[k[2]][1]) or (len(k[0][0]) == len(ck[k[2]][1]) and len(k[1]) >= len(ck[k[2]][2]))):
+              if (k[2] not in ck) or (len(k[0][0]) > len(ck[k[2]][1]) or (len(k[0][0]) == len(ck[k[2]][1]) and len(k[1]) >= len(ck[k[2]][2]))):
                 ck[k[2]] = (v, k[0][0], k[1])
         path = cls.connect(url, url_p, headers, timeout, max_hlength if max_length < 0 else min(max_length, max_hlength), end_time, pconnection, ip)
         try:
@@ -3004,7 +3004,7 @@ def HTTPRequestConstructor(socket_source=socket, proxy=None):
               psock.settimeout(rem_time)
               psock.sendall(('CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n%s\r\n' % (*(cls._netloc_split(url_p.netloc, '80') * 2), ('Proxy-Authorization: %s\r\n' % cls.PROXY_AUTH) if cls.PROXY_AUTH else '')).encode('iso-8859-1'))
               rem_time = cls._rem_time(timeout, end_time)
-              if not HTTPMessage(psock, body=False, decompress=False, decode=None, max_hlength=max_hlength, max_time=rem_time).code in ('200', '204'):
+              if HTTPMessage(psock, body=False, decompress=False, decode=None, max_hlength=max_hlength, max_time=rem_time).code not in ('200', '204'):
                 raise
             pconnection[0] = psock
           elif url_p.scheme.lower() == 'https':
@@ -3012,7 +3012,7 @@ def HTTPRequestConstructor(socket_source=socket, proxy=None):
             psock.settimeout(rem_time)
             psock.sendall(('CONNECT %s:%s HTTP/1.1\r\nHost: %s:%s\r\n%s\r\n' % (*(cls._netloc_split(url_p.netloc, '443') * 2), ('Proxy-Authorization: %s\r\n' % cls.PROXY_AUTH) if cls.PROXY_AUTH else '')).encode('iso-8859-1'))
             rem_time = cls._rem_time(timeout, end_time)
-            if not HTTPMessage(psock, body=False, decompress=False, decode=None, max_hlength=max_hlength, max_time=rem_time).code in ('200', '204'):
+            if HTTPMessage(psock, body=False, decompress=False, decode=None, max_hlength=max_hlength, max_time=rem_time).code not in ('200', '204'):
               raise
             rem_time = cls._rem_time(timeout, end_time)
             psock.settimeout(rem_time)
@@ -4567,7 +4567,7 @@ class WebSocketIDServer(TCPIDServer):
       channel = self.channels.get(path, None)
       if channel is None or channel.closed:
         return False
-    if not handler in channel.handlers:
+    if handler not in channel.handlers:
       return False
     return handler.send(data, track)
 
