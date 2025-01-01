@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'IDownload', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -3125,7 +3125,7 @@ class BaseIServer:
 
   def __enter__(self):
     self.start()
-    return self 
+    return self
 
   def __exit__(self, et, ev, tb):
     self.stop()
@@ -4750,7 +4750,7 @@ class WebSocketIDClient(WebSocketHandler):
       th.start()
 
 
-class IDownload:
+class HTTPIDownload:
 
   def __new__(cls, url, path='', headers=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
     self = object.__new__(cls)
@@ -4948,7 +4948,7 @@ class IDownload:
     finally:
       self.stop(False)
 
-  def _start(self, max_sections=5, section_min=None):
+  def _start(self):
     h = {**self.headers, 'Range': 'bytes=0-'}
     try:
       rep = self._req(h)
@@ -4971,7 +4971,8 @@ class IDownload:
         if not size:
           section = False
     except:
-      self.stop()
+      self.stop(False)
+      return
     self.progress['size'] = size
     if section and self._maxsecs >= 2 and size >= 2 * self._secmin:
       with self._lock:
@@ -4988,6 +4989,8 @@ class IDownload:
         with self._lock:
           if self._req is None:
             return
+          self.progress['status'] = 'working (split: yes)'
+          self.progress['status_event'].set()
           th = threading.Thread(target=self._read, args=(0, rep))
           self._threads.append(th)
           section = [0, size, threading.Semaphore()]
@@ -5002,17 +5005,19 @@ class IDownload:
       with self._lock:
         if self._req is None:
           raise
+        self.progress['status'] = 'working (split: no)'
+        self.progress['status_event'].set()
         th = threading.Thread(target=self._sdown, args=(rep,))
         self._threads.append(th)
         th.start()
 
-  def start(self, max_sections=5, section_min=None):
+  def start(self, max_sections=8, section_min=None):
     with self._lock:
       if self._req is None or self._file is None or hasattr(self, '_maxsecs'):
         return
       self._maxsecs = math.floor(max(max_sections, 1))
       self._secmin = math.ceil(max(section_min or 0, self._bsize))
-      self.progress['status'] = 'working'
+      self.progress['status'] = 'starting'
       self.progress['status_event'].set()
       th = threading.Thread(target=self._start)
       self._threads.append(th)
@@ -5033,16 +5038,55 @@ class IDownload:
           pass
         finally:
           self._file = None
-      if hasattr(self, '_condition'):
-        with self._condition:
-          self._condition.notify()
-        for section in self._sections:
-          sem = section[2]
-          if sem is not None:
-            sem.release()
+    if hasattr(self, '_condition'):
+      with self._condition:
+        self._condition.notify()
+      for section in self._sections:
+        sem = section[2]
+        if sem is not None:
+          sem.release()
     if block_on_close:
       for th in self._threads:
         th.join()
+
+  def wait_completed(self):
+    while self.progress['status'] != 'stopped':
+      self.progress['status_event'].wait()
+      self.progress['status_event'].clear()
+    return True if self.progress['downloaded'] == self.progress['size'] else False
+
+  def wait_progressed(self):
+    def _wait_stopped():
+      while self.progress['status'] != 'stopped' and not self.progress['percent_event'].is_set():
+        self.progress['status_event'].wait()
+        self.progress['status_event'].clear()
+      self.progress['percent_event'].set()
+    th = threading.Thread(target=_wait_stopped)
+    th.start()
+    self.progress['percent_event'].wait()
+    self.progress['percent_event'].clear()
+    self.progress['status_event'].set()
+    return self.progress['percent']
+
+  def wait_sections(self):
+    def _wait_stopped():
+      while self.progress['status'] not in ('stopped', 'working (split: no)') and not self.progress['sections_event'].is_set():
+        self.progress['status_event'].wait()
+        self.progress['status_event'].clear()
+      self.progress['sections_event'].set()
+    th = threading.Thread(target=_wait_stopped)
+    th.start()
+    self.progress['sections_event'].wait()
+    self.progress['sections_event'].clear()
+    self.progress['status_event'].set()
+    return self.progress['sections']
+
+  def __enter__(self):
+    self.start()
+    return self
+
+  def __exit__(self, et, ev, tb):
+    self.stop()
 
 
 class NTPClient:
