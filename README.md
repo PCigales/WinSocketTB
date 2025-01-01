@@ -14,8 +14,9 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 11. Interruptible HTTP Server: HTTPIServer
 12. Interruptible websocket server: WebSocketIDServer / WebSocketIDAltServer + WebSocketRequestHandler [+ WebSocketDataStore]
 13. Interruptible websocket client: WebSocketIDClient [+ WebSocketDataStore]
-14. Time and offset from NTP Server: NTPClient
-15. Time based One Time Password: TOTPassword
+14. Interruptible downloader compatible with proxy: IDownload
+15. Time and offset from NTP Server: NTPClient
+16. Time based One Time Password: TOTPassword
 
 Usage: from SocketTB import *  
 See test.py for examples
