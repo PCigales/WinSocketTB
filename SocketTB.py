@@ -4887,7 +4887,6 @@ class IDownload:
               return
           try:
             b = rep.body(r)
-            time.sleep(0.1)
             l = len(b)
             if not l:
               raise
@@ -5044,6 +5043,7 @@ class IDownload:
     if block_on_close:
       for th in self._threads:
         th.join()
+
 
 class NTPClient:
 
