@@ -4756,10 +4756,16 @@ class HTTPIDownload:
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
-    self.headers = {} if headers is None else headers
+    try:
+      self.headers = headers if isinstance(headers, dict) else dict(map(str.strip, e.split(':', 1)) for e in (headers or '').splitlines() if ':' in e and e.lower != 'host')
+    except:
+      return None
     self._bsize = max(block_size, 1)
     if any(k.lower() == 'range' for k in self.headers):
       return None
+    for k in tuple(self.headers.keys()):
+      if k.lower() in ('accept-encoding', 'te'):
+        del self.headers[k]
     f = os.path.basename(path) in ('', '.', '..')
     path = os.path.abspath(os.path.expandvars(path))
     if f:
