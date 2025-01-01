@@ -172,6 +172,10 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   print(pcon)
   print(HTTPRequest('http://localhost:9000/nul', method='PUT', data=b'0' * 11, pconnection=pcon))
   print(pcon)
+  d = HTTPIDownload('http://localhost:9000/test.py', 'nul', timeout=5, block_size=4)
+  d.start(3)
+  while d.progress['status'] != 'stopped':
+    print(d.wait_sections(), d.progress['status'])
 
 locale.setlocale(locale.LC_TIME, '')
 with NTPClient('time.google.com') as ntpc:
