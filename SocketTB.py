@@ -1,4 +1,4 @@
-# SocketTB v1.3.0 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.4.0 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'IDownload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -572,13 +572,13 @@ class ISocketGenerator:
   def setdefaulttimeout(self, timeout):
     self.defaulttimeout = timeout
 
-  def create_connection(self, address, timeout='', source_address=None):
+  def create_connection(self, address, timeout='', source_address=None, type=socket.SOCK_STREAM):
     if timeout == '':
       timeout = socket.getdefaulttimeout()
     err = None
     t = time.monotonic()
     rt = timeout
-    for res in socket.getaddrinfo(*address, 0, socket.SOCK_STREAM):
+    for res in socket.getaddrinfo(*address, family=socket.AF_UNSPEC, type=type):
       if self.closed:
         return None
       if timeout is not None and rt < 0:
@@ -600,7 +600,7 @@ class ISocketGenerator:
         rt = timeout + t - time.monotonic()
     raise err if err is not None else socket.gaierror()
 
-  def create_server(self, address, family=socket.AF_INET, backlog=None, reuse_port=False, dualstack_ipv6=False, type=socket.SOCK_STREAM):
+  def create_server(self, address, family=socket.AF_UNSPEC, backlog=None, reuse_port=False, dualstack_ipv6=False, type=socket.SOCK_STREAM):
     res = socket.getaddrinfo(address[0], address[1], family=family, type=type, flags=socket.AI_PASSIVE)[0]
     isock = self.new(*res[:3])
     try:
@@ -3219,7 +3219,7 @@ class UDPIServer(BaseIServer):
     super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, threaded, daemon_thread)
 
   def _server_initiate(self):
-    f = 0
+    f = socket.AF_UNSPEC
     if self.multicast_membership:
       self.multicast_membership = socket.getaddrinfo(self.multicast_membership, None, type=socket.SOCK_DGRAM)[0]
       f = self.multicast_membership[0]
@@ -3270,7 +3270,7 @@ class TCPIServer(BaseIServer):
   def _server_initiate(self):
     if isinstance(self.server_address, int):
       self.server_address = (None, self.server_address)
-    self.isocket = self.isocketgen.create_server(self.server_address, family=0, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack)
+    self.isocket = self.isocketgen.create_server(self.server_address, family=socket.AF_UNSPEC, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack)
     if self.nssl_context:
       self.isocket = self.nssl_context.wrap_socket(self.isocket, server_side=True)
     self.server_address = self.isocket.getsockname()
@@ -3346,7 +3346,7 @@ class MultiUDPIServer(UDPIServer):
     else:
       if isinstance(self.server_address, int):
         self.server_address = tuple((ip[1], self.server_address) for ip in MultiUDPIServer.retrieve_ips())
-      self.isockets = tuple(self.isocketgen.create_server(addr, family=0, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in self.server_address)
+      self.isockets = tuple(self.isocketgen.create_server(addr, family=socket.AF_UNSPEC, backlog=False, reuse_port=self.allow_reuse_address, dualstack_ipv6=self.dual_stack, type=socket.SOCK_DGRAM) for addr in self.server_address)
       self.server_address = tuple(isock.getsockname() for isock in self.isockets)
 
   def _get_request(self, isocket):
@@ -4749,6 +4749,301 @@ class WebSocketIDClient(WebSocketHandler):
       th = threading.Thread(target=self._close, args=(timeout, False), daemon=self.daemon_thread)
       th.start()
 
+
+class IDownload:
+
+  def __new__(cls, url, path='', headers=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+    self = object.__new__(cls)
+    self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
+    self.url = url
+    self.headers = {} if headers is None else headers
+    self._bsize = max(block_size, 1)
+    if any(k.lower() == 'range' for k in self.headers):
+      return None
+    f = os.path.basename(path) in ('', '.', '..')
+    path = os.path.abspath(os.path.expandvars(path))
+    if f:
+      self.path = os.path.normpath(os.path.join(path, os.path.basename(urllib.parse.urlsplit(url).path.split(';', 1)[0]).lstrip('\\')))
+      if os.path.commonpath((path, self.path)) != path or os.path.basename(self.path) in ('', '.', '..'):
+        return None
+    else:
+      self.path = path
+    try:
+      self._file = open(self.path, 'wb')
+    except:
+      return None
+    self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
+    self._threads = []
+    self._lock = threading.Lock()
+    self._flock = threading.Lock()
+    self.progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'sections': [], 'status_event': threading.Event(), 'percent_event': threading.Event(), 'sections_event': threading.Event()}
+    return self
+
+  def _nsection(self, s=None, restart=False):
+    if restart:
+      start = self._sections[s][0]
+    else:
+      with self._lock:
+        if self._req is None:
+          return False
+        tsection = None
+        tps = None
+        size = 0
+        for s_, section_ in enumerate(self._sections):
+          if s_ == s:
+            continue
+          size_ = section_[1] - self._bsize
+          if size_ >= max(size, 2 * self._secmin):
+            tsection = section_
+            tps = self.progress['sections'][s_]
+            size = size_
+        if tsection is None:
+          return False
+        size //= 2
+        start = tsection[0] + tsection[1] - size
+    h = {**self.headers, 'Range': 'bytes=%d-' % start}
+    try:
+      rep = self._req(h)
+      if rep.code != '206':
+        return False
+      if int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
+        return False
+    except:
+      return False
+    if restart:
+      return rep
+    with self._lock:
+      if self._req is None or start - tsection[0] - self._bsize < self._secmin:
+        return False
+      tsection[1] -= size
+      tps['size'] -= size
+      tps['percent'] = math.floor(tps['retrieved'] / tps['size'] * 100)
+      self.progress['sections_event'].set()
+      if s is None:
+        th = threading.Thread(target=self._read, args=(len(self._sections), rep))
+        self._threads.append(th)
+        section = [start, size, threading.Semaphore()]
+        self._sections.append(section)
+        self.progress['sections'].append({'status': 'running', 'start': start, 'size': size, 'retrieved': 0, 'percent': 0, 'previous': []})
+        self.progress['sections_event'].set()
+        th.start()
+        return True
+      else:
+        section = self._sections[s]
+        section[0] = start
+        section[1] = size
+        ps = self.progress['sections'][s]
+        ps['previous'].append({'start': ps['start'], 'size': ps['size']})
+        ps.update({'status': 'running', 'start': start, 'size': size, 'retrieved': 0, 'percent': 0})
+        self.progress['sections_event'].set()
+        return rep
+
+  def _write(self):
+    while True:
+      with self._condition:
+        while not self._pending:
+          if self._file is None:
+            return
+          self._condition.wait()
+        sem, start, b = self._pending.popleft()
+        with self._lock:
+          if self._file is None:
+            return
+        end = sem is None and not any(section_[2] for section_ in self._sections) and not self._pending
+      if sem is None:
+        if end:
+          self.stop(False)
+          return
+        continue
+      with self._flock:
+        self._file.seek(start, os.SEEK_SET)
+        self._file.write(b)
+        self.progress['downloaded'] += len(b)
+        p = self.progress['percent']
+        self.progress['percent'] = math.floor(self.progress['downloaded'] / self.progress['size'] * 100)
+        if p != self.progress['percent']:
+          self.progress['percent_event'].set()
+      sem.release()
+
+  def _read(self, s, rep):
+    section = self._sections[s]
+    ps = self.progress['sections'][s]
+    try:
+      while True:
+        while True:
+          with self._lock:
+            if self._req is None:
+              return
+            r = min(self._bsize, section[1])
+          if r <= 0:
+            try:
+              rep.body(-1)
+            except:
+              pass
+            break
+          section[2].acquire()
+          with self._lock:
+            if self._req is None:
+              return
+          try:
+            b = rep.body(r)
+            time.sleep(0.1)
+            l = len(b)
+            if not l:
+              raise
+          except:
+            ps['status'] = 'recovering'
+            self.progress['sections_event'].set()
+            section[2].release()
+            rep = None
+            while not rep:
+              with self._slock:
+                with self._lock:
+                  if self._req is None:
+                    return
+                rep = self._nsection(s, True)
+            ps['status'] = 'running'
+            self.progress['sections_event'].set()
+            continue
+          with self._condition:
+            if self._req is None:
+              return
+            self._pending.append((section[2], section[0], b))
+            self._condition.notify()
+            with self._lock:
+              section[0] += l
+              section[1] -= l
+            ps['retrieved'] += len(b)
+            p = ps['percent']
+            ps['percent'] = math.floor(ps['retrieved'] / ps['size'] * 100)
+            if p != ps['percent']:
+              self.progress['sections_event'].set()
+        with self._slock:
+          rep = self._nsection(s)
+        if not rep:
+          break
+      with self._condition:
+        section[2] = None
+        self._pending.append((None, None, None))
+        self._condition.notify()
+    finally:
+      ps['status'] = 'stopped'
+      self.progress['sections_event'].set()
+
+  def _sdown(self, rep):
+    try:
+      while True:
+        b = rep.body(self._bsize)
+        if not b:
+          break
+        with self._flock:
+          self._file.write(b)
+        self.progress['downloaded'] += len(b)
+        if self.progress['size']:
+          p = self.progress['percent']
+          self.progress['percent'] = math.floor(self.progress['downloaded'] / self.progress['size'] * 100)
+          if p != self.progress['percent']:
+            self.progress['percent_event'].set()
+    except:
+      return
+    finally:
+      self.stop(False)
+
+  def _start(self, max_sections=5, section_min=None):
+    h = {**self.headers, 'Range': 'bytes=0-'}
+    try:
+      rep = self._req(h)
+      if rep.code == '206':
+        section = True
+      elif rep.code == '200':
+        section = rep.header('Accept-Ranges', 'none').lower() != 'none'
+      else:
+        section = False
+        del h['Range']
+        rep = self._req(h)
+        if rep.code != '200':
+          raise
+      size = int(rep.header('Content-Length', 0))
+      if not size and section:
+        try:
+          size = int(rep.header('Content-Range', '').rpartition('/')[2])
+        except:
+          pass
+        if not size:
+          section = False
+    except:
+      self.stop()
+    self.progress['size'] = size
+    if section and self._maxsecs >= 2 and size >= 2 * self._secmin:
+      with self._lock:
+        if self._req is None:
+          return
+        self._pending = deque()
+        self._condition = threading.Condition()
+        self._slock = threading.Lock()
+        self._sections = []
+        th = threading.Thread(target=self._write)
+        self._threads.append(th)
+        th.start()
+      with self._slock:
+        with self._lock:
+          if self._req is None:
+            return
+          th = threading.Thread(target=self._read, args=(0, rep))
+          self._threads.append(th)
+          section = [0, size, threading.Semaphore()]
+          self._sections.append(section)
+          self.progress['sections'].append({'status': 'running', 'start': 0, 'size': size, 'retrieved': 0, 'percent': 0, 'previous': []})
+          self.progress['sections_event'].set()
+          th.start()
+        for s in range(1, self._maxsecs):
+          if not self._nsection():
+            break
+    else:
+      with self._lock:
+        if self._req is None:
+          raise
+        th = threading.Thread(target=self._sdown, args=(rep,))
+        self._threads.append(th)
+        th.start()
+
+  def start(self, max_sections=5, section_min=None):
+    with self._lock:
+      if self._req is None or self._file is None or hasattr(self, '_maxsecs'):
+        return
+      self._maxsecs = math.floor(max(max_sections, 1))
+      self._secmin = math.ceil(max(section_min or 0, self._bsize))
+      self.progress['status'] = 'working'
+      self.progress['status_event'].set()
+      th = threading.Thread(target=self._start)
+      self._threads.append(th)
+      th.start()
+
+  def stop(self, block_on_close=True):
+    with self._lock:
+      if self._req is None:
+        return
+      self._req = None
+      self.progress['status'] = 'stopped'
+      self.progress['status_event'].set()
+      self.isocketgen.close()
+      with self._flock:
+        try:
+          self._file.close()
+        except:
+          pass
+        finally:
+          self._file = None
+      if hasattr(self, '_condition'):
+        with self._condition:
+          self._condition.notify()
+        for section in self._sections:
+          sem = section[2]
+          if sem is not None:
+            sem.release()
+    if block_on_close:
+      for th in self._threads:
+        th.join()
 
 class NTPClient:
 
