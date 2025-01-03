@@ -4752,7 +4752,7 @@ class WebSocketIDClient(WebSocketHandler):
 
 class HTTPIDownload:
 
-  def __new__(cls, url, path='', headers=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+  def __new__(cls, url, file='', headers=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
@@ -4765,18 +4765,37 @@ class HTTPIDownload:
     for k in tuple(self.headers.keys()):
       if k.lower() in ('accept-encoding', 'te'):
         del self.headers[k]
-    f = os.path.basename(path) in ('', '.', '..')
-    path = os.path.abspath(os.path.expandvars(path))
-    if f:
-      self.path = os.path.normpath(os.path.join(path, os.path.basename(urllib.parse.urlsplit(url).path.split(';', 1)[0]).lstrip('\\')))
-      if os.path.commonpath((path, self.path)) != path or os.path.basename(self.path) in ('', '.', '..'):
-        return None
-    else:
-      self.path = path
     try:
-      self._file = open(self.path, 'wb')
+      file = os.fsdecode(file)
     except:
-      return None
+      pass
+    if isinstance(file, str):
+      f = os.path.basename(file) in ('', '.', '..')
+      path = os.path.abspath(os.path.expandvars(file))
+      if f:
+        file = os.path.normpath(os.path.join(path, os.path.basename(urllib.parse.urlsplit(url).path.split(';', 1)[0]).lstrip('\\')))
+        if os.path.commonpath((path, file)) != path or os.path.basename(file) in ('', '.', '..'):
+          return None
+      else:
+        file = path
+      try:
+        self.file = open(file, 'wb')
+        self._close = True
+      except:
+        return None
+    elif isinstance(file, int):
+      self.file = open(file, 'wb', closefd=False)
+      self._close = True
+    else:
+      try:
+        if not file.seekable() or not file.writable():
+          return None
+        file.seek(0)
+      except:
+        return None
+      self.file = file
+      self._close = False
+    self._file = self.file
     self._bsize = max(block_size, 1)
     self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
     self._threads = []
@@ -5074,7 +5093,8 @@ class HTTPIDownload:
       self.isocketgen.close()
       with self._flock:
         try:
-          self._file.close()
+          if self._close:
+            self._file.close()
         except:
           pass
         finally:

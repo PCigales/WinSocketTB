@@ -3,6 +3,7 @@ import ssl
 import base64
 import os
 import threading
+import io
 import time
 import locale
 
@@ -172,10 +173,13 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   print(pcon)
   print(HTTPRequest('http://localhost:9000/nul', method='PUT', data=b'0' * 11, pconnection=pcon))
   print(pcon)
-  d = HTTPIDownload('http://localhost:9000/test.py', 'nul', timeout=5, block_size=4)
+  b = io.BytesIO()
+  d = HTTPIDownload('http://localhost:9000/test.py', b, timeout=5, block_size=4)
   d.start(3)
   while d.wait_completion(0) not in ('completed', 'aborted'):
     print(d.wait_segments())
+  print(len(b.getvalue()))
+  b.close()
 
 locale.setlocale(locale.LC_TIME, '')
 with NTPClient('time.google.com') as ntpc:
