@@ -4760,7 +4760,6 @@ class HTTPIDownload:
       self.headers = headers if isinstance(headers, dict) else dict(map(str.strip, e.split(':', 1)) for e in (headers or '').splitlines() if ':' in e and e.lower != 'host')
     except:
       return None
-    self._bsize = max(block_size, 1)
     if any(k.lower() == 'range' for k in self.headers):
       return None
     for k in tuple(self.headers.keys()):
@@ -4778,12 +4777,18 @@ class HTTPIDownload:
       self._file = open(self.path, 'wb')
     except:
       return None
+    self._bsize = max(block_size, 1)
     self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
-    self.progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'sections': [], 'status_event': threading.Event(), 'percent_event': threading.Event(), 'sections_event': threading.Event()}
+    self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'sections': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'sections': False}}
     return self
+
+  @property
+  def progress(self):
+    with self._progress['eventing']['condition']:
+      return {'status': self._progress['status']} if self._progress['status'] in ('waiting', 'starting') else ({**{k: v for k, v in self._progress.items() if k != 'eventing'}, 'segments': sorted((ps for sec in self._progress['sections'] for ps in sec), key=lambda ps: ps['start'])} if hasattr(self, '_condition') else {k: v for k, v in self._progress.items() if k not in ('sections', 'eventing')})
 
   def _nsection(self, s=None, restart=False):
     if restart:
@@ -4801,7 +4806,7 @@ class HTTPIDownload:
           size_ = section_[1] - self._bsize
           if size_ >= max(size, 2 * self._secmin):
             tsection = section_
-            tps = self.progress['sections'][s_]
+            tps = self._progress['sections'][s_][0]
             size = size_
         if tsection is None:
           return False
@@ -4810,9 +4815,7 @@ class HTTPIDownload:
     h = {**self.headers, 'Range': 'bytes=%d-' % start}
     try:
       rep = self._req(h)
-      if rep.code != '206':
-        return False
-      if int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
+      if rep.code != '206' or int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
         return False
     except:
       return False
@@ -4822,26 +4825,29 @@ class HTTPIDownload:
       if self._req is None or start - tsection[0] - self._bsize < self._secmin:
         return False
       tsection[1] -= size
-      tps['size'] -= size
-      tps['percent'] = math.floor(tps['retrieved'] / tps['size'] * 100)
-      self.progress['sections_event'].set()
+      with self._progress['eventing']['condition']:
+        tps['size'] -= size
+        tps['percent'] = math.floor(tps['downloaded'] / tps['size'] * 100)
       if s is None:
         th = threading.Thread(target=self._read, args=(len(self._sections), rep))
         self._threads.append(th)
         section = [start, size, threading.Semaphore()]
         self._sections.append(section)
-        self.progress['sections'].append({'status': 'running', 'start': start, 'size': size, 'retrieved': 0, 'percent': 0, 'previous': []})
-        self.progress['sections_event'].set()
+        with self._progress['eventing']['condition']:
+          self._progress['sections'].append([{'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0}])
+          self._progress['eventing']['sections'] = True
+          self._progress['eventing']['condition'].notify_all()
         th.start()
         return True
       else:
         section = self._sections[s]
         section[0] = start
         section[1] = size
-        ps = self.progress['sections'][s]
-        ps['previous'].append({'start': ps['start'], 'size': ps['size']})
-        ps.update({'status': 'running', 'start': start, 'size': size, 'retrieved': 0, 'percent': 0})
-        self.progress['sections_event'].set()
+        ps = self._progress['sections'][s]
+        with self._progress['eventing']['condition']:
+          ps.insert(0, {'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0})
+          self._progress['eventing']['sections'] = True
+          self._progress['eventing']['condition'].notify_all()
         return rep
 
   def _write(self):
@@ -4851,104 +4857,126 @@ class HTTPIDownload:
           if self._file is None:
             return
           self._condition.wait()
-        sem, start, b = self._pending.popleft()
+        sem, start, b, ps = self._pending.popleft()
         with self._lock:
           if self._file is None:
             return
-        end = sem is None and not any(section_[2] for section_ in self._sections) and not self._pending
+          end = sem is None and not any(section_[2] for section_ in self._sections) and not self._pending
       if sem is None:
         if end:
           self.stop(False)
           return
         continue
       with self._flock:
+        if self._file is None:
+          return
         self._file.seek(start, os.SEEK_SET)
         self._file.write(b)
-        self.progress['downloaded'] += len(b)
-        p = self.progress['percent']
-        self.progress['percent'] = math.floor(self.progress['downloaded'] / self.progress['size'] * 100)
-        if p != self.progress['percent']:
-          self.progress['percent_event'].set()
+        with self._progress['eventing']['condition']:
+          self._progress['downloaded'] += len(b)
+          p = self._progress['percent']
+          self._progress['percent'] = math.floor(self._progress['downloaded'] / self._progress['size'] * 100)
+          if p != self._progress['percent']:
+            self._progress['eventing']['percent'] = True
+            self._progress['eventing']['condition'].notify_all()
+          ps['downloaded'] += len(b)
+          p = ps['percent']
+          ps['percent'] = math.floor(ps['downloaded'] / ps['size'] * 100)
+          if p != ps['percent']:
+            self._progress['eventing']['sections'] = True
+            self._progress['eventing']['condition'].notify_all()
+          if ps['size'] == ps['downloaded']:
+            ps['status'] = 'completed'
+            self._progress['eventing']['sections'] = True
+            self._progress['eventing']['condition'].notify_all()
       sem.release()
 
   def _read(self, s, rep):
     section = self._sections[s]
-    ps = self.progress['sections'][s]
-    try:
+    ps = self._progress['sections'][s][0]
+    while True:
       while True:
-        while True:
-          with self._lock:
-            if self._req is None:
-              return
-            r = min(self._bsize, section[1])
-          if r <= 0:
-            try:
-              rep.body(-1)
-            except:
-              pass
-            break
-          section[2].acquire()
-          with self._lock:
-            if self._req is None:
-              return
+        with self._lock:
+          if self._req is None:
+            return
+          r = min(self._bsize, section[1])
+        if r <= 0:
           try:
-            b = rep.body(r)
-            l = len(b)
-            if not l:
-              raise
+            rep.body(-1)
           except:
-            ps['status'] = 'recovering'
-            self.progress['sections_event'].set()
-            section[2].release()
-            rep = None
-            while not rep:
-              with self._slock:
-                with self._lock:
-                  if self._req is None:
-                    return
-                rep = self._nsection(s, True)
-            ps['status'] = 'running'
-            self.progress['sections_event'].set()
-            continue
-          with self._condition:
+            pass
+          break
+        section[2].acquire()
+        with self._lock:
+          if self._req is None:
+            return
+        try:
+          b = rep.body(r)
+          l = len(b)
+          if not l:
+            raise
+        except:
+          with self._lock:
             if self._req is None:
               return
-            self._pending.append((section[2], section[0], b))
-            self._condition.notify()
-            with self._lock:
-              section[0] += l
-              section[1] -= l
-            ps['retrieved'] += len(b)
-            p = ps['percent']
-            ps['percent'] = math.floor(ps['retrieved'] / ps['size'] * 100)
-            if p != ps['percent']:
-              self.progress['sections_event'].set()
-        with self._slock:
-          rep = self._nsection(s)
-        if not rep:
-          break
-      with self._condition:
-        section[2] = None
-        self._pending.append((None, None, None))
-        self._condition.notify()
-    finally:
-      ps['status'] = 'stopped'
-      self.progress['sections_event'].set()
-
+            with self._progress['eventing']['condition']:
+              ps['status'] = 'recovering'
+              self._progress['eventing']['sections'] = True
+              self._progress['eventing']['condition'].notify_all()
+          section[2].release()
+          rep = None
+          while not rep:
+            with self._slock:
+              with self._lock:
+                if self._req is None:
+                  return
+              rep = self._nsection(s, True)
+          with self._lock:
+            if self._req is None:
+              return
+            with self._progress['eventing']['condition']:
+              ps['status'] = 'running'
+              self._progress['eventing']['sections'] = True
+              self._progress['eventing']['condition'].notify_all()
+          continue
+        with self._condition:
+          if self._req is None:
+            return
+          self._pending.append((section[2], section[0], b, ps))
+          self._condition.notify()
+          with self._lock:
+            section[0] += l
+            section[1] -= l
+      with self._slock:
+        rep = self._nsection(s)
+        ps = self._progress['sections'][s][0]
+      if not rep:
+        break
+    with self._condition:
+      section[2] = None
+      self._pending.append((None, None, None, None))
+      self._condition.notify()
+ 
   def _sdown(self, rep):
     try:
       while True:
         b = rep.body(self._bsize)
         if not b:
+          with self._progress['eventing']['condition']:
+            if not self._progress['size']:
+              self._progress['size'] = self._progress['downloaded']
+              self._progress['percent'] = 100
           break
         with self._flock:
           self._file.write(b)
-        self.progress['downloaded'] += len(b)
-        if self.progress['size']:
-          p = self.progress['percent']
-          self.progress['percent'] = math.floor(self.progress['downloaded'] / self.progress['size'] * 100)
-          if p != self.progress['percent']:
-            self.progress['percent_event'].set()
+          with self._progress['eventing']['condition']:
+            self._progress['downloaded'] += len(b)
+            if self._progress['size']:
+              p = self._progress['percent']
+              self._progress['percent'] = math.floor(self._progress['downloaded'] / self._progress['size'] * 100)
+              if p != self._progress['percent']:
+                self._progress['eventing']['percent'] = True
+                self._progress['eventing']['condition'].notify_all()
     except:
       return
     finally:
@@ -4979,7 +5007,8 @@ class HTTPIDownload:
     except:
       self.stop(False)
       return
-    self.progress['size'] = size
+    with self._progress['eventing']['condition']:
+      self._progress['size'] = size
     if section and self._maxsecs >= 2 and size >= 2 * self._secmin:
       with self._lock:
         if self._req is None:
@@ -4995,14 +5024,18 @@ class HTTPIDownload:
         with self._lock:
           if self._req is None:
             return
-          self.progress['status'] = 'working (split: yes)'
-          self.progress['status_event'].set()
+          with self._progress['eventing']['condition']:
+            self._progress['status'] = 'working (split: yes)'
+            self._progress['eventing']['status'] = True
+            self._progress['eventing']['condition'].notify_all()
           th = threading.Thread(target=self._read, args=(0, rep))
           self._threads.append(th)
           section = [0, size, threading.Semaphore()]
           self._sections.append(section)
-          self.progress['sections'].append({'status': 'running', 'start': 0, 'size': size, 'retrieved': 0, 'percent': 0, 'previous': []})
-          self.progress['sections_event'].set()
+          self._progress['sections'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
+          with self._progress['eventing']['condition']:
+            self._progress['eventing']['sections'] = True
+            self._progress['eventing']['condition'].notify_all()
           th.start()
         for s in range(1, self._maxsecs):
           if not self._nsection():
@@ -5011,8 +5044,10 @@ class HTTPIDownload:
       with self._lock:
         if self._req is None:
           raise
-        self.progress['status'] = 'working (split: no)'
-        self.progress['status_event'].set()
+        with self._progress['eventing']['condition']:
+          self._progress['status'] = 'working (split: no)'
+          self._progress['eventing']['status'] = True
+          self._progress['eventing']['condition'].notify_all()
         th = threading.Thread(target=self._sdown, args=(rep,))
         self._threads.append(th)
         th.start()
@@ -5023,8 +5058,10 @@ class HTTPIDownload:
         return
       self._maxsecs = math.floor(max(max_sections, 1))
       self._secmin = math.ceil(max(section_min or 0, self._bsize))
-      self.progress['status'] = 'starting'
-      self.progress['status_event'].set()
+      with self._progress['eventing']['condition']:
+        self._progress['status'] = 'starting'
+        self._progress['eventing']['status'] = True
+        self._progress['eventing']['condition'].notify_all()
       th = threading.Thread(target=self._start)
       self._threads.append(th)
       th.start()
@@ -5034,8 +5071,6 @@ class HTTPIDownload:
       if self._req is None:
         return
       self._req = None
-      self.progress['status'] = 'stopped'
-      self.progress['status_event'].set()
       self.isocketgen.close()
       with self._flock:
         try:
@@ -5044,6 +5079,15 @@ class HTTPIDownload:
           pass
         finally:
           self._file = None
+      with self._progress['eventing']['condition']:
+        self._progress['status'] = 'completed' if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] == self._progress['downloaded'] else 'aborted'
+        self._progress['eventing']['status'] = True
+        for sec in self._progress['sections']:
+          for ps in sec:
+            if ps['status'] != 'completed':
+              ps['status'] = 'aborted'
+        self._progress['eventing']['sections'] = True
+        self._progress['eventing']['condition'].notify_all()
     if hasattr(self, '_condition'):
       with self._condition:
         self._condition.notify()
@@ -5055,37 +5099,29 @@ class HTTPIDownload:
       for th in self._threads:
         th.join()
 
-  def wait_completed(self):
-    while self.progress['status'] != 'stopped':
-      self.progress['status_event'].wait()
-      self.progress['status_event'].clear()
-    return True if self.progress['downloaded'] == self.progress['size'] else False
+  def wait_completion(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted')), timeout)
+      self._progress['eventing']['status'] = False
+      return self._progress['status']
 
-  def wait_progressed(self):
-    def _wait_stopped():
-      while self.progress['status'] != 'stopped' and not self.progress['percent_event'].is_set():
-        self.progress['status_event'].wait()
-        self.progress['status_event'].clear()
-      self.progress['percent_event'].set()
-    th = threading.Thread(target=_wait_stopped)
-    th.start()
-    self.progress['percent_event'].wait()
-    self.progress['percent_event'].clear()
-    self.progress['status_event'].set()
-    return self.progress['percent']
+  def wait_progression(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['percent']), timeout)
+      self._progress['eventing']['percent'] = False
+      return self._progress['percent']
 
-  def wait_sections(self):
-    def _wait_stopped():
-      while self.progress['status'] not in ('stopped', 'working (split: no)') and not self.progress['sections_event'].is_set():
-        self.progress['status_event'].wait()
-        self.progress['status_event'].clear()
-      self.progress['sections_event'].set()
-    th = threading.Thread(target=_wait_stopped)
-    th.start()
-    self.progress['sections_event'].wait()
-    self.progress['sections_event'].clear()
-    self.progress['status_event'].set()
-    return self.progress['sections']
+  def wait_sections(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['sections']), timeout)
+      self._progress['eventing']['sections'] = False
+      return self._progress['sections']
+
+  def wait_segments(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['sections']), timeout)
+      self._progress['eventing']['sections'] = False
+      return self.progress['segments']
 
   def __enter__(self):
     self.start()
