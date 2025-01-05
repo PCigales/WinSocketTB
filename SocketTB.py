@@ -4868,6 +4868,7 @@ class HTTPIDownload:
         return rep
 
   def _write(self):
+    err = False
     while True:
       with self._condition:
         while not self._pending:
@@ -4887,8 +4888,12 @@ class HTTPIDownload:
       with self._flock:
         if self._file is None:
           return
-        self._file.seek(start, os.SEEK_SET)
-        self._file.write(b)
+        try:
+          self._file.seek(start, os.SEEK_SET)
+          self._file.write(b)
+        except:
+          err = True
+          break
         with self._progress['eventing']['condition']:
           self._progress['downloaded'] += len(b)
           p = self._progress['percent']
@@ -4907,6 +4912,8 @@ class HTTPIDownload:
             self._progress['eventing']['workers'] = True
             self._progress['eventing']['condition'].notify_all()
       sem.release()
+    if err:
+      self.stop(False)
 
   def _read(self, w, rep):
     work = self._workers[w]
