@@ -4752,7 +4752,7 @@ class WebSocketIDClient(WebSocketHandler):
 
 class HTTPIDownload:
 
-  def __new__(cls, url, file='', headers=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+  def __new__(cls, url, file='', headers=None, max_workers=8, section_min=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
@@ -4797,6 +4797,8 @@ class HTTPIDownload:
       self._close = False
     self._file = self.file
     self._bsize = max(block_size, 1)
+    self._maxworks = math.floor(max(max_workers, 1))
+    self._secmin = math.ceil(max(section_min or 0, self._bsize))
     self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
     self._threads = []
     self._lock = threading.Lock()
@@ -5067,12 +5069,10 @@ class HTTPIDownload:
         self._threads.append(th)
         th.start()
 
-  def start(self, max_workers=8, section_min=None):
+  def start(self):
     with self._lock:
-      if self._req is None or self._file is None or hasattr(self, '_maxworks'):
+      if self._req is None or self._file is None or self._threads:
         return
-      self._maxworks = math.floor(max(max_workers, 1))
-      self._secmin = math.ceil(max(section_min or 0, self._bsize))
       with self._progress['eventing']['condition']:
         self._progress['status'] = 'starting'
         self._progress['eventing']['status'] = True
