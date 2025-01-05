@@ -5146,6 +5146,9 @@ class HTTPIDownload:
   def __exit__(self, et, ev, tb):
     self.stop()
 
+  def __repr__(self):
+    return '\r\n'.join(('<HTTPIDownload at %#x>\r\n----------' % id(self), *('%s: %s' % (k.title(), v) for k, v in self.progress.items() if k not in ('workers', 'sections'))))
+
 
 class NTPClient:
 

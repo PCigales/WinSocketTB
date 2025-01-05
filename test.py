@@ -177,6 +177,7 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=3, timeout=5, block_size=4) as d:
     while d.wait_finish(0) not in ('completed', 'aborted'):
       print(d.wait_sections())
+    print(d)
   print(len(b.getvalue()))
   b.close()
 
