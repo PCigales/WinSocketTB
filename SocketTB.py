@@ -4801,36 +4801,36 @@ class HTTPIDownload:
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
-    self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'sections': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'sections': False}}
+    self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
     return self
 
   @property
   def progress(self):
     with self._progress['eventing']['condition']:
-      return {'status': self._progress['status']} if self._progress['status'] in ('waiting', 'starting') else ({**{k: v for k, v in self._progress.items() if k != 'eventing'}, 'segments': sorted((ps for sec in self._progress['sections'] for ps in sec), key=lambda ps: ps['start'])} if hasattr(self, '_condition') else {k: v for k, v in self._progress.items() if k not in ('sections', 'eventing')})
+      return {'status': self._progress['status']} if self._progress['status'] in ('waiting', 'starting') else ({**{k: v for k, v in self._progress.items() if k != 'eventing'}, 'sections': sorted((sec for work in self._progress['workers'] for sec in work), key=lambda sec: sec['start'])} if hasattr(self, '_condition') else {k: v for k, v in self._progress.items() if k not in ('workers', 'eventing')})
 
-  def _nsection(self, s=None, restart=False):
+  def _nsection(self, w=None, restart=False):
     if restart:
-      start = self._sections[s][0]
+      start = self._workers[w][0]
     else:
       with self._lock:
         if self._req is None:
           return False
-        tsection = None
-        tps = None
+        work = None
+        sec = None
         size = 0
-        for s_, section_ in enumerate(self._sections):
-          if s_ == s:
+        for w_, work_ in enumerate(self._workers):
+          if w_ == w:
             continue
-          size_ = section_[1] - self._bsize
+          size_ = work_[1] - self._bsize
           if size_ >= max(size, 2 * self._secmin):
-            tsection = section_
-            tps = self._progress['sections'][s_][0]
+            work = work_
+            sec = self._progress['workers'][w_][0]
             size = size_
-        if tsection is None:
+        if work is None:
           return False
         size //= 2
-        start = tsection[0] + tsection[1] - size
+        start = work[0] + work[1] - size
     h = {**self.headers, 'Range': 'bytes=%d-' % start}
     try:
       rep = self._req(h)
@@ -4841,31 +4841,27 @@ class HTTPIDownload:
     if restart:
       return rep
     with self._lock:
-      if self._req is None or start - tsection[0] - self._bsize < self._secmin:
+      if self._req is None or start - work[0] - self._bsize < self._secmin:
         return False
-      tsection[1] -= size
+      work[1] -= size
       with self._progress['eventing']['condition']:
-        tps['size'] -= size
-        tps['percent'] = math.floor(tps['downloaded'] / tps['size'] * 100)
-      if s is None:
-        th = threading.Thread(target=self._read, args=(len(self._sections), rep))
+        sec['size'] -= size
+        sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
+      if w is None:
+        th = threading.Thread(target=self._read, args=(len(self._workers), rep))
         self._threads.append(th)
-        section = [start, size, threading.Semaphore()]
-        self._sections.append(section)
+        self._workers.append([start, size, threading.Semaphore()])
         with self._progress['eventing']['condition']:
-          self._progress['sections'].append([{'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0}])
-          self._progress['eventing']['sections'] = True
+          self._progress['workers'].append([{'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0}])
+          self._progress['eventing']['workers'] = True
           self._progress['eventing']['condition'].notify_all()
         th.start()
         return True
       else:
-        section = self._sections[s]
-        section[0] = start
-        section[1] = size
-        ps = self._progress['sections'][s]
+        self._workers[w][0:2] = start, size
         with self._progress['eventing']['condition']:
-          ps.insert(0, {'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0})
-          self._progress['eventing']['sections'] = True
+          self._progress['workers'][w].insert(0, {'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0})
+          self._progress['eventing']['workers'] = True
           self._progress['eventing']['condition'].notify_all()
         return rep
 
@@ -4876,11 +4872,11 @@ class HTTPIDownload:
           if self._file is None:
             return
           self._condition.wait()
-        sem, start, b, ps = self._pending.popleft()
+        sem, start, b, sec = self._pending.popleft()
         with self._lock:
           if self._file is None:
             return
-          end = sem is None and not any(section_[2] for section_ in self._sections) and not self._pending
+          end = sem is None and not any(work[2] for work in self._workers) and not self._pending
       if sem is None:
         if end:
           self.stop(False)
@@ -4898,34 +4894,35 @@ class HTTPIDownload:
           if p != self._progress['percent']:
             self._progress['eventing']['percent'] = True
             self._progress['eventing']['condition'].notify_all()
-          ps['downloaded'] += len(b)
-          p = ps['percent']
-          ps['percent'] = math.floor(ps['downloaded'] / ps['size'] * 100)
-          if p != ps['percent']:
-            self._progress['eventing']['sections'] = True
+          sec['downloaded'] += len(b)
+          p = sec['percent']
+          sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
+          if p != sec['percent']:
+            self._progress['eventing']['workers'] = True
             self._progress['eventing']['condition'].notify_all()
-          if ps['size'] == ps['downloaded']:
-            ps['status'] = 'completed'
-            self._progress['eventing']['sections'] = True
+          if sec['size'] == sec['downloaded']:
+            sec['status'] = 'completed'
+            self._progress['eventing']['workers'] = True
             self._progress['eventing']['condition'].notify_all()
       sem.release()
 
-  def _read(self, s, rep):
-    section = self._sections[s]
-    ps = self._progress['sections'][s][0]
+  def _read(self, w, rep):
+    work = self._workers[w]
+    with self._progress['eventing']['condition']:
+      sec = self._progress['workers'][w][0]
     while True:
       while True:
         with self._lock:
           if self._req is None:
             return
-          r = min(self._bsize, section[1])
+          r = min(self._bsize, work[1])
         if r <= 0:
           try:
             rep.body(-1)
           except:
             pass
           break
-        section[2].acquire()
+        work[2].acquire()
         with self._lock:
           if self._req is None:
             return
@@ -4939,40 +4936,40 @@ class HTTPIDownload:
             if self._req is None:
               return
             with self._progress['eventing']['condition']:
-              ps['status'] = 'recovering'
-              self._progress['eventing']['sections'] = True
+              sec['status'] = 'recovering'
+              self._progress['eventing']['workers'] = True
               self._progress['eventing']['condition'].notify_all()
-          section[2].release()
+          work[2].release()
           rep = None
           while not rep:
             with self._slock:
               with self._lock:
                 if self._req is None:
                   return
-              rep = self._nsection(s, True)
+              rep = self._nsection(w, True)
           with self._lock:
             if self._req is None:
               return
             with self._progress['eventing']['condition']:
-              ps['status'] = 'running'
-              self._progress['eventing']['sections'] = True
+              sec['status'] = 'running'
+              self._progress['eventing']['workers'] = True
               self._progress['eventing']['condition'].notify_all()
           continue
         with self._condition:
           if self._req is None:
             return
-          self._pending.append((section[2], section[0], b, ps))
+          self._pending.append((work[2], work[0], b, sec))
           self._condition.notify()
           with self._lock:
-            section[0] += l
-            section[1] -= l
+            work[0] += l
+            work[1] -= l
       with self._slock:
-        rep = self._nsection(s)
-        ps = self._progress['sections'][s][0]
+        rep = self._nsection(w)
+        sec = self._progress['workers'][w][0]
       if not rep:
         break
     with self._condition:
-      section[2] = None
+      work[2] = None
       self._pending.append((None, None, None, None))
       self._condition.notify()
  
@@ -5028,14 +5025,14 @@ class HTTPIDownload:
       return
     with self._progress['eventing']['condition']:
       self._progress['size'] = size
-    if section and self._maxsecs >= 2 and size >= 2 * self._secmin:
+    if section and self._maxworks >= 2 and size >= 2 * self._secmin:
       with self._lock:
         if self._req is None:
           return
         self._pending = deque()
         self._condition = threading.Condition()
         self._slock = threading.Lock()
-        self._sections = []
+        self._workers = []
         th = threading.Thread(target=self._write)
         self._threads.append(th)
         th.start()
@@ -5049,14 +5046,13 @@ class HTTPIDownload:
             self._progress['eventing']['condition'].notify_all()
           th = threading.Thread(target=self._read, args=(0, rep))
           self._threads.append(th)
-          section = [0, size, threading.Semaphore()]
-          self._sections.append(section)
-          self._progress['sections'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
+          self._workers.append([0, size, threading.Semaphore()])
           with self._progress['eventing']['condition']:
-            self._progress['eventing']['sections'] = True
+            self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
+            self._progress['eventing']['workers'] = True
             self._progress['eventing']['condition'].notify_all()
           th.start()
-        for s in range(1, self._maxsecs):
+        for w in range(1, self._maxworks):
           if not self._nsection():
             break
     else:
@@ -5071,11 +5067,11 @@ class HTTPIDownload:
         self._threads.append(th)
         th.start()
 
-  def start(self, max_sections=8, section_min=None):
+  def start(self, max_workers=8, section_min=None):
     with self._lock:
-      if self._req is None or self._file is None or hasattr(self, '_maxsecs'):
+      if self._req is None or self._file is None or hasattr(self, '_maxworks'):
         return
-      self._maxsecs = math.floor(max(max_sections, 1))
+      self._maxworks = math.floor(max(max_workers, 1))
       self._secmin = math.ceil(max(section_min or 0, self._bsize))
       with self._progress['eventing']['condition']:
         self._progress['status'] = 'starting'
@@ -5102,46 +5098,46 @@ class HTTPIDownload:
       with self._progress['eventing']['condition']:
         self._progress['status'] = 'completed' if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] == self._progress['downloaded'] else 'aborted'
         self._progress['eventing']['status'] = True
-        for sec in self._progress['sections']:
-          for ps in sec:
-            if ps['status'] != 'completed':
-              ps['status'] = 'aborted'
-        self._progress['eventing']['sections'] = True
+        for work in self._progress['workers']:
+          for sec in work:
+            if sec['status'] != 'completed':
+              sec['status'] = 'aborted'
+        self._progress['eventing']['workers'] = True
         self._progress['eventing']['condition'].notify_all()
     if hasattr(self, '_condition'):
       with self._condition:
         self._condition.notify()
-      for section in self._sections:
-        sem = section[2]
+      for work in self._workers:
+        sem = work[2]
         if sem is not None:
           sem.release()
     if block_on_close:
       for th in self._threads:
         th.join()
 
-  def wait_completion(self, timeout=None):
+  def wait_finish(self, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted')), timeout)
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'}), timeout)
       self._progress['eventing']['status'] = False
       return self._progress['status']
 
   def wait_progression(self, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['percent']), timeout)
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['percent']), timeout)
       self._progress['eventing']['percent'] = False
       return self._progress['percent']
 
+  def wait_workers(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted', 'working (split: no)'} or self._progress['eventing']['workers']), timeout)
+      self._progress['eventing']['workers'] = False
+      return self._progress['workers']
+
   def wait_sections(self, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['sections']), timeout)
-      self._progress['eventing']['sections'] = False
-      return self._progress['sections']
-
-  def wait_segments(self, timeout=None):
-    with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in ('waiting', 'completed', 'aborted') or self._progress['eventing']['sections']), timeout)
-      self._progress['eventing']['sections'] = False
-      return self.progress['segments']
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted', 'working (split: no)'} or self._progress['eventing']['workers']), timeout)
+      self._progress['eventing']['workers'] = False
+      return self.progress.get('sections', [])
 
   def __enter__(self):
     self.start()

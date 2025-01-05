@@ -176,8 +176,8 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   b = io.BytesIO()
   d = HTTPIDownload('http://localhost:9000/test.py', b, timeout=5, block_size=4)
   d.start(3)
-  while d.wait_completion(0) not in ('completed', 'aborted'):
-    print(d.wait_segments())
+  while d.wait_finish(0) not in ('completed', 'aborted'):
+    print(d.wait_sections())
   print(len(b.getvalue()))
   b.close()
 
