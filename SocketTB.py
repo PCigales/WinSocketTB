@@ -5036,7 +5036,7 @@ class HTTPIDownload:
       rep = self._req(h)
       section = None
       if rep.code in ('200', '206'):
-        section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or None)
+        section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or rep.header('Content-Range', '').split(' ')[0].strip().lower() == 'bytes' or None)
       if section is None:
         h = self.headers
         h['Accept-Encoding'] = h['TE']
