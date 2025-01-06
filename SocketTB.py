@@ -5054,7 +5054,6 @@ class HTTPIDownload:
     except:
       self.stop(False)
       return
-    print(rep)
     with self._progress['eventing']['condition']:
       self._progress['size'] = size
     if section:
