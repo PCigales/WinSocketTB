@@ -2780,7 +2780,7 @@ class _HTTPBaseRequest:
       url_p = urllib.parse.urlsplit(url, allow_fragments=False)
       if headers is None:
         headers = {}
-      hitems = headers.items()
+      hitems = tuple((k.strip(), v) for k, v in headers.items())
       if pconnection is None:
         pconnection = [None, {}, []]
         hccl = True
@@ -3479,7 +3479,7 @@ class HTTPRequestHandler(RequestHandler):
             raise
           r -= len(b)
           self.request.sendall(b)
-      elif bo is not None:
+      elif bo:
         self.request.sendall(memoryview(bo)[brange[0]:brange[1]] if brange else bo)
       return True
     except:
@@ -3548,34 +3548,54 @@ class HTTPRequestHandler(RequestHandler):
       '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True))))
     return self._send(resp, rbody, rsize, rrange)
 
-  def _send_resp_chnk(self, rtype, rsize, rbody, rmod, enc):
+  def _send_resp_chnk(self, rtype, rsize, rbody, rmod, rrange=None, enc=False, tenc=False):
     resp = \
-      'HTTP/1.1 200 OK\r\n' \
+      'HTTP/1.1 %s\r\n' \
       'Content-Type: %s\r\n' \
-      'Transfer-Encoding: chunked\r\n' \
+      'Transfer-Encoding: chunked%s\r\n' \
       'Date: %s\r\n' \
       'Server: SocketTB\r\n' \
       'Cache-Control: no-cache, must-revalidate\r\n' \
-      'Content-Encoding: %s\r\n' \
+      '%s' \
       'Accept-Ranges: bytes\r\n' \
-      'Last-Modified: %s\r\n' \
-      '\r\n' % (rtype, email.utils.formatdate(time.time(), usegmt=True), enc[0], email.utils.formatdate(rmod, usegmt=True))
+      '%s' \
+      '%s' \
+      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, ((', %s' % tenc[0]) if tenc else ''), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True))))
+    if rrange and enc:
+      return False
     try:
       self.request.sendall(resp.encode('ISO-8859-1'))
-      if rbody:
-        rbody.seek(0, os.SEEK_SET)
-        r = rsize
+      if isinstance(rbody, IOBase):
+        rbody.seek((rrange[0] if rrange else 0), os.SEEK_SET)
+        r = rrange[1] - rrange[0] if rrange else rsize
         while r > 0:
           b = rbody.read(min(r, 1048576))
           if not b:
             raise
           r -= len(b)
-          c = enc[1].compress(b)
-          if c:
-            self.request.sendall(b'%x\r\n%b\r\n' % (len(c), c))
-        c = enc[1].flush()
-        if c:
-          self.request.sendall(b'%x\r\n%b\r\n' % (len(c), c))
+          if enc:
+            b = enc[1].compress(b)
+          if b:
+            if tenc:
+              b = tenc[1].compress(b)
+            if b:
+              self.request.sendall(b'%x\r\n%b\r\n' % (len(b), b))
+        b = b''
+        if enc:
+          b = enc[1].flush()
+        if tenc:
+          b = b''.join((tenc[1].compress(b), tenc[1].flush())) if b else tenc[1].flush()
+        if b:
+          self.request.sendall(b'%x\r\n%b\r\n' % (len(b), b))
+        self.request.sendall(b'0\r\n\r\n')
+      elif rbody:
+        b = memoryview(rbody)[rrange[0]:rrange[1]] if rrange else rbody
+        if b:
+          if enc:
+            b = b''.join((enc[1].compress(b), enc[1].flush()))
+          if tenc:
+            b = b''.join((tenc[1].compress(b), tenc[1].flush()))
+          self.request.sendall(b'%x\r\n%b\r\n' % (len(b), b))
         self.request.sendall(b'0\r\n\r\n')
       return True
     except:
@@ -3758,7 +3778,8 @@ class HTTPRequestHandler(RequestHandler):
                   pass
               else:
                 enc = self._set_enc(req.header('Accept-Encoding'), 'text/html', bool(rrange))
-                if enc is None:
+                tenc = self._set_enc(req.header('TE'), 'application/x-compressed' if enc else 'text/html')
+                if enc is None or tenc is None:
                   if not self._send_err_na():
                     closed = True
                   continue
@@ -3772,15 +3793,16 @@ class HTTPRequestHandler(RequestHandler):
                     if not self._send_err_rns():
                       closed = True
                     continue
-                elif enc:
+                elif enc and not tenc:
                   rbody = b''.join((enc[1].compress(rbody), enc[1].flush()))
-                if not self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc):
+                if not (self._send_resp_chnk('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc, tenc) if tenc else self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc)):
                   closed = True
                 continue
             if os.path.isfile(apath):
               btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
               enc = self._set_enc(req.header('Accept-Encoding'), btype, bool(rrange))
-              if enc is None:
+              tenc = self._set_enc(req.header('TE'), 'application/x-compressed' if enc else btype)
+              if enc is None or tenc is None:
                 if not self._send_err_na():
                   closed = True
                 continue
@@ -3809,7 +3831,7 @@ class HTTPRequestHandler(RequestHandler):
                   if not self._send_err_rns():
                     closed = True
                   continue
-              if not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, enc) if enc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange)):
+              if not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange, enc, tenc) if enc or tenc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange)):
                 closed = True
             else:
               if not self._send_err_nf():
@@ -4757,25 +4779,25 @@ class HTTPIDownload:
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
     try:
-      self.headers = headers if isinstance(headers, dict) else dict(map(str.strip, e.split(':', 1)) for e in (headers or '').splitlines() if ':' in e and e.lower != 'host')
+      self.headers = {k: v for k, v in (((k_.strip(), v_) for k_, v_ in headers.items()) if isinstance(headers, dict) else ((k_.strip(), v_.strip()) for k_, v_ in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e))) if k.lower() not in ('host', 'accept-encoding', 'te')}
     except:
       return None
     if any(k.lower() == 'range' for k in self.headers):
       return None
-    for k in tuple(self.headers.keys()):
-      if k.lower() in ('accept-encoding', 'te'):
-        del self.headers[k]
+    self.headers['Accept-Encoding'] = 'identity'
+    self.headers['TE'] = 'identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip'
     try:
       file = os.fsdecode(file)
     except:
       pass
     if isinstance(file, str):
-      f = os.path.basename(file) in ('', '.', '..')
       path = os.path.abspath(os.path.expandvars(file))
-      if f:
+      if os.path.isdir(path):
         file = os.path.normpath(os.path.join(path, os.path.basename(urllib.parse.urlsplit(url).path.split(';', 1)[0]).lstrip('\\')))
         if os.path.commonpath((path, file)) != path or os.path.basename(file) in ('', '.', '..'):
           return None
+      elif os.path.basename(file) in ('', '.', '..'):
+        return None
       else:
         file = path
       try:
@@ -4799,7 +4821,7 @@ class HTTPIDownload:
     self._bsize = max(block_size, 1)
     self._maxworks = math.floor(max(max_workers, 1))
     self._secmin = math.ceil(max(section_min or 0, self._bsize))
-    self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
+    self._req = lambda h, r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, headers=h, timeout=timeout, max_length=-1, max_hlength=max_hlength, decompress=True, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
@@ -4981,7 +5003,7 @@ class HTTPIDownload:
       work[2] = None
       self._pending.append((None, None, None, None))
       self._condition.notify()
- 
+
   def _sdown(self, rep):
     try:
       while True:
@@ -5011,13 +5033,12 @@ class HTTPIDownload:
     h = {**self.headers, 'Range': 'bytes=0-'}
     try:
       rep = self._req(h)
-      if rep.code == '206':
-        section = True
-      elif rep.code == '200':
-        section = rep.header('Accept-Ranges', 'none').lower() != 'none'
-      else:
-        section = False
-        del h['Range']
+      section = None
+      if rep.code in ('200', '206'):
+        section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or None)
+      if section is None:
+        h = self.headers
+        h['Accept-Encoding'] = h['TE']
         rep = self._req(h)
         if rep.code != '200':
           raise
@@ -5034,7 +5055,7 @@ class HTTPIDownload:
       return
     with self._progress['eventing']['condition']:
       self._progress['size'] = size
-    if section and self._maxworks >= 2 and size >= 2 * self._secmin:
+    if section:
       with self._lock:
         if self._req is None:
           return
