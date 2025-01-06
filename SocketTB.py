@@ -4813,6 +4813,7 @@ class HTTPIDownload:
         if not file.seekable() or not file.writable():
           return None
         file.seek(0)
+        file.truncate(0)
       except:
         return None
       self.file = file
@@ -5053,6 +5054,7 @@ class HTTPIDownload:
     except:
       self.stop(False)
       return
+    print(rep)
     with self._progress['eventing']['condition']:
       self._progress['size'] = size
     if section:
