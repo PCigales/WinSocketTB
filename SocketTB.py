@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -4859,7 +4859,7 @@ class HTTPIDownload:
     h = {**self.headers, 'Range': 'bytes=%d-' % start}
     try:
       rep = self._req(h)
-      if rep.code != '206' or int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
+      if rep.code not in ('200', '206') or rep.header('Content-Encoding') or (rep.header('Accept-Ranges', 'none').lower() != 'bytes' and rep.header('Content-Range', '').split(' ')[0].strip().lower() != 'bytes') or int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
         return False
     except:
       return False
@@ -5125,13 +5125,13 @@ class HTTPIDownload:
         finally:
           self._file = None
       with self._progress['eventing']['condition']:
-        self._progress['status'] = 'completed' if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] == self._progress['downloaded'] else 'aborted'
-        self._progress['eventing']['status'] = True
         for work in self._progress['workers']:
           for sec in work:
             if sec['status'] != 'completed':
               sec['status'] = 'aborted'
         self._progress['eventing']['workers'] = True
+        self._progress['status'] = 'completed' if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] == self._progress['downloaded'] else 'aborted'
+        self._progress['eventing']['status'] = True
         self._progress['eventing']['condition'].notify_all()
     if hasattr(self, '_condition'):
       with self._condition:
@@ -5177,6 +5177,129 @@ class HTTPIDownload:
 
   def __repr__(self):
     return '\r\n'.join(('<HTTPIDownload at %#x>\r\n----------' % id(self), *('%s: %s' % (k.title(), v) for k, v in self.progress.items() if k not in ('workers', 'sections'))))
+
+
+class HTTPIListDownload:
+
+  def __new__(cls, urls, files='', max_downloads=4, headers=None, max_workers=8, section_min=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None):
+    if not len(urls):
+      return None
+    self = object.__new__(cls)
+    self.urls = urls
+    self._maxdwnlds = math.floor(max(max_downloads, 1))
+    try:
+      files = os.fsdecode(files)
+    except:
+      pass
+    if isinstance(files, str):
+      if not os.path.isdir(os.path.abspath(os.path.expandvars(files))):
+        return None
+      files = (files,) * len(urls)
+    try:
+      if len(files) < len(urls):
+        return None
+      self.idownloads = tuple(HTTPIDownload(url, file, headers, max_workers, section_min, timeout, max_hlength, block_size, retry, max_redir, unsecuring_redir, ip, basic_auth, process_cookies, proxy) for url, file in zip(urls, files))
+    except:
+      return None
+    self._threads = []
+    self._lock = threading.Lock()
+    self._progress = {'status': 'waiting', 'number': len(urls), 'running': 0, 'completed': 0, 'aborted': 0, 'eventing': {'condition': threading.Condition(), 'status': False, 'processed': False}}
+    return self
+
+  @property
+  def progress(self):
+    with self._progress['eventing']['condition']:
+      return {'status': self._progress['status']} if self._progress['status'] == 'waiting' else ({**{k: v for k, v in self._progress.items() if k != 'eventing'}, 'downloads': tuple(idownload.progress if idownload else None for idownload in self.idownloads)})
+
+  def _download(self):
+    while True:
+      with self._lock:
+        if not self._maxdwnlds:
+          return
+        with self._progress['eventing']['condition']:
+          d = sum(self._progress[st] for st in ('running', 'completed', 'aborted'))
+          if d >= len(self.urls):
+            break
+          idownload = self.idownloads[d]
+          if idownload:
+            idownload.start()
+            self._progress['running'] += 1
+            self._progress['eventing']['processed'] = True
+            self._progress['eventing']['condition'].notify_all()
+          else:
+            self._progress['aborted'] += 1
+            self._progress['eventing']['processed'] = True
+            self._progress['eventing']['condition'].notify_all()
+            continue
+      st = idownload.wait_finish()
+      with self._progress['eventing']['condition']:
+        self._progress[st] += 1
+        self._progress['running'] -= 1
+        self._progress['eventing']['processed'] = True
+        self._progress['eventing']['condition'].notify_all()
+    with self._progress['eventing']['condition']:
+      end = self._progress['running'] == 0
+    if end:
+      self.stop(False)
+
+  def _start(self):
+    for d in range(min(len(self.urls), self._maxdwnlds)):
+      with self._lock:
+        if not self._maxdwnlds:
+          return
+        th = threading.Thread(target=self._download)
+        self._threads.append(th)
+        th.start()
+
+  def start(self):
+    with self._lock:
+      if not self._maxdwnlds or self._threads:
+        return
+      with self._progress['eventing']['condition']:
+        self._progress['status'] = 'running'
+        self._progress['eventing']['status'] = True
+        self._progress['eventing']['condition'].notify_all()
+      th = threading.Thread(target=self._start)
+      self._threads.append(th)
+      th.start()
+
+  def stop(self, block_on_close=True):
+    with self._lock:
+      if not self._maxdwnlds:
+        return
+      self._maxdwnlds = 0
+      for idownload in self.idownloads:
+        if idownload:
+          idownload.stop(block_on_close)
+      with self._progress['eventing']['condition']:
+        self._progress['running'] = 0
+        self._progress['completed'] = 0
+        self._progress['aborted'] = 0
+        for idownload in self.idownloads:
+          if idownload:
+            idownload.stop(block_on_close)
+            self._progress[idownload.wait_finish()] += 1
+          else:
+            self._progress['aborted'] += 1
+        self._progress['eventing']['processed'] = True
+        self._progress['status'] = 'completed' if self._progress['number'] == self._progress['completed'] else 'aborted'
+        self._progress['eventing']['status'] = True
+        self._progress['eventing']['condition'].notify_all()
+    if block_on_close:
+      for th in self._threads:
+        th.join()
+
+  def wait_finish(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'}), timeout)
+      self._progress['eventing']['status'] = False
+      return self._progress['status']
+
+  def wait_progression(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['processed']), timeout)
+      self._progress['eventing']['processed'] = False
+      return {k: self._progress[k] for k in ('number', 'running', 'completed', 'aborted')}
 
 
 class NTPClient:
