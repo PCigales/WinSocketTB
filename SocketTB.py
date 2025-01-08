@@ -4774,11 +4774,24 @@ class WebSocketIDClient(WebSocketHandler):
 
 class HTTPIDownload:
 
-  def __new__(cls, url, file='', headers=None, max_workers=8, section_min=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+  def __new__(cls, url, file='', headers=None, max_workers=8, section_min=None, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None, resume=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
     try:
+      if resume:
+        if isinstance(resume, cls):
+          resume = resume.progress
+        if resume['status'] != 'aborted':
+          return None
+        if 'sections' not in resume:
+          resume['sections'] = sorted((sec for work in resume['workers'] for sec in work), key=lambda sec: sec['start'])
+        self._workers = [[sec['start'] + sec['downloaded'], sec['size'] - sec['downloaded'], True] for sec in resume.get('sections', ()) if sec['status'] == 'aborted']
+        if not self._workers:
+          return None
+        self._progress = {'status': 'waiting', 'size': resume['size'], 'downloaded': resume['downloaded'], 'percent': resume['percent'], 'workers': [*([sec | {'status': 'waiting'}] for sec in resume['sections'] if sec['status'] == 'aborted'), *filter(None, ([sec.copy() for sec in resume['sections'] if sec['status'] == 'completed'],))], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
+      else:
+        self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
       self.headers = {k: v for k, v in (((k_.strip(), v_) for k_, v_ in headers.items()) if isinstance(headers, dict) else ((k_.strip(), v_.strip()) for k_, v_ in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e))) if k.lower() not in ('host', 'accept-encoding', 'te')}
     except:
       return None
@@ -4801,19 +4814,21 @@ class HTTPIDownload:
       else:
         file = path
       try:
-        self.file = open(file, 'wb')
+        self.file = open(file, ('r+b' if resume else 'wb'))
         self._close = True
       except:
         return None
     elif isinstance(file, int):
-      self.file = open(file, 'wb', closefd=False)
+      self.file = open(file, ('r+b' if resume else 'wb'), closefd=False)
+      self.file.seek(0, os.SEEK_SET)
       self._close = True
     else:
       try:
         if not file.seekable() or not file.writable():
           return None
-        file.seek(0)
-        file.truncate(0)
+        file.seek(0, os.SEEK_SET)
+        if not resume:
+          file.truncate(0)
       except:
         return None
       self.file = file
@@ -4826,7 +4841,6 @@ class HTTPIDownload:
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
-    self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
     return self
 
   @property
@@ -4845,6 +4859,11 @@ class HTTPIDownload:
         sec = None
         size = 0
         for w_, work_ in enumerate(self._workers):
+          if work_[2] is True:
+            work = work_
+            sec = self._progress['workers'][w_][0]
+            size = work_[1]
+            break
           if w_ == w:
             continue
           size_ = work_[1] - self._bsize
@@ -4852,9 +4871,11 @@ class HTTPIDownload:
             work = work_
             sec = self._progress['workers'][w_][0]
             size = size_
-        if work is None:
-          return False
-        size //= 2
+        else:
+          if work is None:
+            return False
+          size //= 2
+          w_ += 1
         start = work[0] + work[1] - size
     h = {**self.headers, 'Range': 'bytes=%d-' % start}
     try:
@@ -4866,18 +4887,24 @@ class HTTPIDownload:
     if restart:
       return rep
     with self._lock:
-      if self._req is None or start - work[0] - self._bsize < self._secmin:
+      if self._req is None:
         return False
-      work[1] -= size
-      with self._progress['eventing']['condition']:
-        sec['size'] -= size
-        sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
+      if work[2] is not True:
+        if start - work[0] - self._bsize < self._secmin:
+          return False
+        work[1] -= size
       if w is None:
-        th = threading.Thread(target=self._read, args=(len(self._workers), rep))
+        th = threading.Thread(target=self._read, args=(w_, rep))
         self._threads.append(th)
-        self._workers.append([start, size, threading.Semaphore()])
         with self._progress['eventing']['condition']:
-          self._progress['workers'].append([{'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0}])
+          if work[2] is True:
+            work[2] = threading.Semaphore()
+            sec['status'] = 'running'
+          else:
+            self._workers.append([start, size, threading.Semaphore()])
+            sec['size'] -= size
+            sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
+            self._progress['workers'].insert(w_, [{'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0}])
           self._progress['eventing']['workers'] = True
           self._progress['eventing']['condition'].notify_all()
         th.start()
@@ -4885,7 +4912,15 @@ class HTTPIDownload:
       else:
         self._workers[w][0:2] = start, size
         with self._progress['eventing']['condition']:
-          self._progress['workers'][w].insert(0, {'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0})
+          if work[2] is True:
+            del self._workers[w_]
+            del self._progress['workers'][w_]
+            sec['status'] = 'running'
+            self._progress['workers'][w].insert(0, sec)
+          else:
+            sec['size'] -= size
+            sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
+            self._progress['workers'][w].insert(0, {'status': 'running', 'start': start, 'size': size, 'downloaded': 0, 'percent': 0})
           self._progress['eventing']['workers'] = True
           self._progress['eventing']['condition'].notify_all()
         return rep
@@ -4940,9 +4975,9 @@ class HTTPIDownload:
 
   def _read(self, w, rep):
     work = self._workers[w]
-    with self._progress['eventing']['condition']:
-      sec = self._progress['workers'][w][0]
     while True:
+      with self._progress['eventing']['condition']:
+        sec = self._progress['workers'][w][0]
       while True:
         with self._lock:
           if self._req is None:
@@ -4997,7 +5032,6 @@ class HTTPIDownload:
             work[1] -= l
       with self._slock:
         rep = self._nsection(w)
-        sec = self._progress['workers'][w][0]
       if not rep:
         break
     with self._condition:
@@ -5031,31 +5065,35 @@ class HTTPIDownload:
       self.stop(False)
 
   def _start(self):
-    h = {**self.headers, 'Range': 'bytes=0-'}
-    try:
-      rep = self._req(h)
-      section = None
-      if rep.code in ('200', '206'):
-        section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or rep.header('Content-Range', '').split(' ')[0].strip().lower() == 'bytes' or None)
-      if section is None:
-        h = self.headers
-        h['Accept-Encoding'] = h['TE']
+    if hasattr(self, '_workers'):
+      section = True
+      rep = None
+    else:
+      h = {**self.headers, 'Range': 'bytes=0-'}
+      try:
         rep = self._req(h)
-        if rep.code != '200':
-          raise
-      size = int(rep.header('Content-Length', 0))
-      if not size and section:
-        try:
-          size = int(rep.header('Content-Range', '').rpartition('/')[2])
-        except:
-          pass
-        if not size:
-          section = False
-    except:
-      self.stop(False)
-      return
-    with self._progress['eventing']['condition']:
-      self._progress['size'] = size
+        section = None
+        if rep.code in ('200', '206'):
+          section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or rep.header('Content-Range', '').split(' ')[0].strip().lower() == 'bytes' or None)
+        if section is None:
+          h = self.headers
+          h['Accept-Encoding'] = h['TE']
+          rep = self._req(h)
+          if rep.code != '200':
+            raise
+        size = int(rep.header('Content-Length', 0))
+        if not size and section:
+          try:
+            size = int(rep.header('Content-Range', '').rpartition('/')[2])
+          except:
+            pass
+          if not size:
+            section = False
+      except:
+        self.stop(False)
+        return
+      with self._progress['eventing']['condition']:
+        self._progress['size'] = size
     if section:
       with self._lock:
         if self._req is None:
@@ -5063,7 +5101,8 @@ class HTTPIDownload:
         self._pending = deque()
         self._condition = threading.Condition()
         self._slock = threading.Lock()
-        self._workers = []
+        if rep is not None:
+          self._workers = []
         th = threading.Thread(target=self._write)
         self._threads.append(th)
         th.start()
@@ -5075,17 +5114,22 @@ class HTTPIDownload:
             self._progress['status'] = 'working (split: yes)'
             self._progress['eventing']['status'] = True
             self._progress['eventing']['condition'].notify_all()
-          th = threading.Thread(target=self._read, args=(0, rep))
-          self._threads.append(th)
-          self._workers.append([0, size, threading.Semaphore()])
-          with self._progress['eventing']['condition']:
-            self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
-            self._progress['eventing']['workers'] = True
-            self._progress['eventing']['condition'].notify_all()
-          th.start()
-        for w in range(1, self._maxworks):
+          if rep is not None:
+            th = threading.Thread(target=self._read, args=(0, rep))
+            self._threads.append(th)
+            self._workers.append([0, size, threading.Semaphore()])
+            with self._progress['eventing']['condition']:
+              self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
+              self._progress['eventing']['workers'] = True
+              self._progress['eventing']['condition'].notify_all()
+            th.start()
+        for w in range((0 if rep is None else 1), self._maxworks):
           if not self._nsection():
             break
+        else:
+          w += 1
+      if rep is None and w == 0:
+        self.stop(False)
     else:
       with self._lock:
         if self._req is None:
@@ -5099,6 +5143,7 @@ class HTTPIDownload:
         th.start()
 
   def start(self):
+    end = False
     with self._lock:
       if self._req is None or self._file is None or self._threads:
         return
@@ -5106,9 +5151,12 @@ class HTTPIDownload:
         self._progress['status'] = 'starting'
         self._progress['eventing']['status'] = True
         self._progress['eventing']['condition'].notify_all()
-      th = threading.Thread(target=self._start)
-      self._threads.append(th)
-      th.start()
+      if not end:
+        th = threading.Thread(target=self._start)
+        self._threads.append(th)
+        th.start()
+    if end:
+      self.stop(False)
 
   def stop(self, block_on_close=True):
     with self._lock:
@@ -5138,7 +5186,7 @@ class HTTPIDownload:
         self._condition.notify()
       for work in self._workers:
         sem = work[2]
-        if sem is not None:
+        if sem is not None and sem is not True:
           sem.release()
     if block_on_close:
       for th in self._threads:
