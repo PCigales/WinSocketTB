@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "idownload",
+  "version": "1.0",
+  "description": "Interruptible download extension",
+  "icons": {
+    "48": "icon_48.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{78cb9e53-bb02-5cba-b0ce-95e5e5171dd3}"
+    }
+  },
+  "permissions": ["downloads", "webRequest", "nativeMessaging"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "scripts": ["script.js"],
+    "type": "module"
+  }
+}
+
