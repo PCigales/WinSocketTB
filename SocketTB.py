@@ -4899,6 +4899,10 @@ class HTTPIDownload:
         with self._progress['eventing']['condition']:
           if work[2] is True:
             work[2] = threading.Semaphore()
+            if w_ == 0:
+              self._progress['status'] = 'working (split: yes)'
+              self._progress['eventing']['status'] = True
+              self._progress['eventing']['percent'] = True
             sec['status'] = 'running'
           else:
             self._workers.append([start, size, threading.Semaphore()])
@@ -5110,26 +5114,23 @@ class HTTPIDownload:
         with self._lock:
           if self._req is None:
             return
-          with self._progress['eventing']['condition']:
-            self._progress['status'] = 'working (split: yes)'
-            self._progress['eventing']['status'] = True
-            self._progress['eventing']['condition'].notify_all()
           if rep is not None:
             th = threading.Thread(target=self._read, args=(0, rep))
             self._threads.append(th)
             self._workers.append([0, size, threading.Semaphore()])
             with self._progress['eventing']['condition']:
+              self._progress['status'] = 'working (split: yes)'
+              self._progress['eventing']['status'] = True
+              self._progress['eventing']['percent'] = True
               self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
               self._progress['eventing']['workers'] = True
               self._progress['eventing']['condition'].notify_all()
             th.start()
         for w in range((0 if rep is None else 1), self._maxworks):
           if not self._nsection():
+            if w == 0:
+              self.stop(False)
             break
-        else:
-          w += 1
-      if rep is None and w == 0:
-        self.stop(False)
     else:
       with self._lock:
         if self._req is None:
