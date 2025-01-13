@@ -5138,6 +5138,7 @@ class HTTPIDownload:
         with self._progress['eventing']['condition']:
           self._progress['status'] = 'working (split: no)'
           self._progress['eventing']['status'] = True
+          self._progress['eventing']['percent'] = True
           self._progress['eventing']['condition'].notify_all()
         th = threading.Thread(target=self._sdown, args=(rep,))
         self._threads.append(th)
@@ -5201,7 +5202,7 @@ class HTTPIDownload:
 
   def wait_progression(self, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['percent']), timeout)
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or (self._progress['status'] == 'working (split: no)' and not self._progress['size']) or self._progress['eventing']['percent']), timeout)
       self._progress['eventing']['percent'] = False
       return self._progress['percent']
 
