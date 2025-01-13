@@ -5134,7 +5134,7 @@ class HTTPIDownload:
     else:
       with self._lock:
         if self._req is None:
-          raise
+          return
         with self._progress['eventing']['condition']:
           self._progress['status'] = 'working (split: no)'
           self._progress['eventing']['status'] = True
