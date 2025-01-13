@@ -5046,7 +5046,13 @@ class HTTPIDownload:
   def _sdown(self, rep):
     try:
       while True:
+        with self._lock:
+          if self._req is None:
+            return False
         b = rep.body(self._bsize)
+        with self._lock:
+          if self._req is None:
+            return False
         if not b:
           with self._progress['eventing']['condition']:
             if not self._progress['size']:
@@ -5194,6 +5200,21 @@ class HTTPIDownload:
       for th in self._threads:
         th.join()
 
+  def progress_bar(self, length=100):
+    with self._progress['eventing']['condition']:
+      if self._progress['status'] == 'completed':
+        return '█' * length
+      elif self._progress['status'] == 'aborted' and not hasattr(self, '_condition'):
+        return '░' * length
+      elif hasattr(self, '_condition'):
+        cs = cb = 0
+        return ''.join('█' * (b := math.floor(sec['downloaded'] * (bl := (-cb + (cb := round(length * (cs := cs + sec['size']) / self.progress['size'])))) / sec['size'])) + '░' * (bl - b) for sec in self.progress['sections'])
+        pass
+      elif self._progress['size']:
+        return '█' * (b := math.floor(self._progress['downloaded'] * length / self._progress['size'])) + '░' * (length - b)
+      else:
+        return ''
+
   def wait_finish(self, timeout=None):
     with self._progress['eventing']['condition']:
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'}), timeout)
@@ -5217,6 +5238,13 @@ class HTTPIDownload:
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted', 'working (split: no)'} or self._progress['eventing']['workers']), timeout)
       self._progress['eventing']['workers'] = False
       return self.progress.get('sections', [])
+
+  def wait_progress_bar(self, length=100, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or (self._progress['status'] == 'working (split: no)' and not self._progress['size']) or self._progress['eventing']['percent'] or self._progress['eventing']['workers']), timeout)
+      self._progress['eventing']['percent'] = False
+      self._progress['eventing']['workers'] = False
+      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent'])
 
   def __enter__(self):
     self.start()

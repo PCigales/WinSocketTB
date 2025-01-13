@@ -50,10 +50,10 @@ else:
   print()
   if started and st != 'completed':
     print('status:', st)
-    print('progression: 0%', end='\b'*18, flush=True)
+    print('progression: 0%', end='\b'*15, flush=True)
     while (st := download.wait_finish(0)) not in ('completed', 'aborted'):
-      print('progression: %d %%' % download.wait_progression(), end='\b'*18, flush=True)
-    print('progression: %d %%' % download.wait_progression())
+      print('progression: %s' % download.wait_progress_bar(100), end='\b'*118, flush=True)
+    print('progression: %s' % download.wait_progress_bar(100))
   print('status:', st)
   if started:
     while True:
