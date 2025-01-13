@@ -33,7 +33,7 @@ else:
       raise
     download.start()
     download.wait_progression()
-    started = download.wait_finish(0) != 'aborted'
+    started = (st := download.wait_finish(0)) != 'aborted'
   except:
     started = False
     exit(1)
@@ -48,21 +48,37 @@ else:
   print('Downloading:', url)
   print('into:', dfile)
   print()
-  print('progression: 0%', end='\b'*18, flush=True)
-  if started:
-    while download.wait_finish(0) not in ('completed', 'aborted'):
+  if started and st != 'completed':
+    print('status:', st)
+    print('progression: 0%', end='\b'*18, flush=True)
+    while (st := download.wait_finish(0)) not in ('completed', 'aborted'):
       print('progression: %d %%' % download.wait_progression(), end='\b'*18, flush=True)
     print('progression: %d %%' % download.wait_progression())
-  print('status:', download.wait_finish(0))
-  print()
-  while True:
-    try:
-      os.rename(dfile, file)
-      print('renamed:', file)
-      break
-    except:
+  print('status:', st)
+  if started:
+    while True:
       try:
-        os.remove(file)
+        if dfile:
+          os.rename(dfile, file)
+          dfile = None
+        if st == 'completed':
+          print()
+          print('renamed:', file)
+          break
+        else:
+          raise
+      except:
+        try:
+          os.remove(file)
+          if not dfile:
+            break
+        except:
+          time.sleep(0.5)
+  else:
+    while True:
+      try:
+        os.remove(dfile)
+        break
       except:
         time.sleep(0.5)
   while msvcrt.kbhit():
