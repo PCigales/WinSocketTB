@@ -3945,6 +3945,7 @@ class WebSocketHandler:
     self.close_received = False
     self.close_sent = False
     self.close_requested = None
+    self.close_send_data = False
     self.closed = False
     self.buffer = bytearray()
     self.frame_type = None
@@ -4165,7 +4166,7 @@ class WebSocketHandler:
     self.data_length = None
 
   def send(self, data, track=False):
-    if self.closed or self.close_received or self.close_requested is not None:
+    if self.closed or self.close_received or (self.close_requested is not None and not self.close_send_data):
       return False
     frame = self.build_frame('data', data)
     if frame is None:
@@ -4178,12 +4179,13 @@ class WebSocketHandler:
     self.send_event.set()
     return True if r in (None, False) else r
 
-  def close(self, data=b''):
+  def close(self, data=b'', once_data_sent=False):
     if isinstance(data, str):
       data = data.encode('utf-8')
     else:
       data = data or b''
     if len(data) <= 0x7d:
+      self.close_send_data = once_data_sent
       self.close_requested = data
       self.send_event.set()
       return True
@@ -4212,11 +4214,12 @@ class WebSocketHandler:
         break
       if self.ping_data is not None:
         self.send_pong()
-      if self.close_requested is not None:
+      if self.close_requested is not None and not self.close_send_data:
         self.send_close((struct.pack('!H', 4000) + self.close_requested) if self.close_requested else b'')
         self.close_sent = True
         break
       if se:
+        close = self.close_requested is not None and self.close_send_data
         self.send_event_callback()
         if len(self.queue) > 0:
           frame = self.queue.pop(0)
@@ -4228,6 +4231,9 @@ class WebSocketHandler:
             self.sent_id += 1
         if len(self.queue) > 0:
           self.send_event.set()
+        elif close:
+          self.close_send_data = False
+          continue
       self.ping_lock.acquire()
       while self.pending_pings <= 1:
         rt = (self.pending_pings / 2 + 1) * self.inactive_maxtime / 2 + self.last_reception_time - time.monotonic()
@@ -4318,6 +4324,7 @@ class WebSocketHandler:
         out_handler_thread.join()
       except:
         pass
+    self.closed = True
     self.closed_callback()
 
 
@@ -4325,7 +4332,7 @@ class WebSocketDataStore:
 
   def __init__(self, incoming_event=None):
     self.outgoing = []
-    self.outgoing_lock = threading.Lock()
+    self.outgoing_lock = threading.RLock()
     self.incoming = []
     self.incoming_text_only = False
     self.before_shutdown = None
@@ -4419,9 +4426,10 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
     WebSocketHandler.send_event_callback(self)
     if self.channel.datastore is None or not self.outgoing:
       return
+    self.outgoing = False
     nb_values = len(self.channel.datastore.outgoing)
     for i in range(nb_values):
-      if self.close_received or self.channel.closed:
+      if self.close_received:
         break
       if i == len(self.outgoing_seq):
         self.outgoing_seq.append(None)
@@ -4516,8 +4524,8 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
 
 class WebSocketIDServer(TCPIDServer):
 
-  def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=128, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
-    super().__init__(server_address, WebSocketRequestHandler, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, nssl_context)
+  def __init__(self, server_address, request_handler_class=WebSocketRequestHandler, allow_reuse_address=False, dual_stack=True, request_queue_size=128, daemon_thread=False, inactive_maxtime=180, nssl_context=None):
+    super().__init__(server_address, request_handler_class, allow_reuse_address, dual_stack, request_queue_size, True, daemon_thread, nssl_context)
     self.address = server_address
     self.channels = {}
     self.inactive_maxtime = inactive_maxtime
@@ -4559,7 +4567,7 @@ class WebSocketIDServer(TCPIDServer):
       with self.lock:
         self.threads.remove(threading.current_thread())
 
-  def close(self, path, data=b'', timeout=None, block_on_close=False):
+  def close(self, path, data=b'', once_data_sent=False, timeout=None, block_on_close=False):
     path = path.lstrip('/').strip()
     with self.lock:
       channel = self.channels.pop(path, None)
@@ -4568,13 +4576,17 @@ class WebSocketIDServer(TCPIDServer):
       channel.closed = True
       if channel.datastore is not None:
         data = channel.datastore.before_shutdown
+        if once_data_sent:
+          for h in channel.handlers:
+            h.outgoing = True
+            h.send_event.set()
       if isinstance(data, str):
         data = data.encode('utf-8')
       else:
         data = data or b''
       data = data[:0x7d]
       for h in channel.handlers:
-        h.close(data)
+        h.close(data, once_data_sent)
     if block_on_close:
       self._close(channel, timeout, True)
     else:
@@ -4619,7 +4631,7 @@ class WebSocketIDServer(TCPIDServer):
       self.idsocket.close()
       pathes = list(self.channels.keys())
     for path in pathes:
-      self.close(path, timeout=timeout, block_on_close=False)
+      self.close(path, once_data_sent=False, timeout=timeout, block_on_close=False)
     self.thread.join()
     self.thread = None
     rt = None if timeout is None else timeout + t - time.monotonic()
@@ -4688,6 +4700,7 @@ class WebSocketIDClient(WebSocketHandler):
     WebSocketHandler.send_event_callback(self)
     if self.datastore is None or not self.outgoing:
       return
+    self.outgoing = False
     nb_values = len(self.datastore.outgoing)
     for i in range(nb_values):
       if self.close_received:
@@ -4756,15 +4769,18 @@ class WebSocketIDClient(WebSocketHandler):
         self.thread.join()
     self.thread = None
 
-  def close(self, data=b'', timeout=None, block_on_close=False):
+  def close(self, data=b'', once_data_sent=False, timeout=None, block_on_close=False):
     if self.datastore is not None:
       data = self.datastore.before_shutdown
+      if once_data_sent:
+        self.outgoing = True
+        self.send_event.set()
     if isinstance(data, str):
       data = data.encode('utf-8')
     else:
       data = data or b''
     data = data[:0x7d]
-    WebSocketHandler.close(self, data)
+    WebSocketHandler.close(self, data, once_data_sent)
     if block_on_close:
       self._close(timeout, True)
     else:
@@ -4789,9 +4805,9 @@ class HTTPIDownload:
         self._workers = [[sec['start'] + sec['downloaded'], sec['size'] - sec['downloaded'], True] for sec in resume.get('sections', ()) if sec['status'] == 'aborted']
         if not self._workers:
           return None
-        self._progress = {'status': 'waiting', 'size': resume['size'], 'downloaded': resume['downloaded'], 'percent': resume['percent'], 'workers': [*([sec | {'status': 'waiting'}] for sec in resume['sections'] if sec['status'] == 'aborted'), *filter(None, ([sec.copy() for sec in resume['sections'] if sec['status'] == 'completed'],))], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
+        self._progress = {'status': 'waiting', 'size': resume['size'], 'downloaded': resume['downloaded'], 'percent': resume['percent'], 'workers': [*([sec | {'status': 'waiting'}] for sec in resume['sections'] if sec['status'] == 'aborted'), *filter(None, ([sec.copy() for sec in resume['sections'] if sec['status'] == 'completed'],))], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
       else:
-        self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'percent': False, 'workers': False}}
+        self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
       self.headers = {k: v for k, v in (((k_.strip(), v_) for k_, v_ in headers.items()) if isinstance(headers, dict) else ((k_.strip(), v_.strip()) for k_, v_ in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e))) if k.lower() not in ('host', 'accept-encoding', 'te')}
     except:
       return None
@@ -4902,7 +4918,7 @@ class HTTPIDownload:
             if w_ == 0:
               self._progress['status'] = 'working (split: yes)'
               self._progress['eventing']['status'] = True
-              self._progress['eventing']['percent'] = True
+              self._progress['eventing']['progression'] = True
             sec['status'] = 'running'
           else:
             self._workers.append([start, size, threading.Semaphore()])
@@ -4957,21 +4973,24 @@ class HTTPIDownload:
           err = True
           break
         with self._progress['eventing']['condition']:
+          notif = False
           self._progress['downloaded'] += len(b)
           p = self._progress['percent']
           self._progress['percent'] = math.floor(self._progress['downloaded'] / self._progress['size'] * 100)
           if p != self._progress['percent']:
-            self._progress['eventing']['percent'] = True
-            self._progress['eventing']['condition'].notify_all()
+            self._progress['eventing']['progression'] = True
+            notif = True
           sec['downloaded'] += len(b)
           p = sec['percent']
           sec['percent'] = math.floor(sec['downloaded'] / sec['size'] * 100)
           if p != sec['percent']:
             self._progress['eventing']['workers'] = True
-            self._progress['eventing']['condition'].notify_all()
+            notif = True
           if sec['size'] == sec['downloaded']:
             sec['status'] = 'completed'
             self._progress['eventing']['workers'] = True
+            notif = True
+          if notif:
             self._progress['eventing']['condition'].notify_all()
       sem.release()
     if err:
@@ -5058,16 +5077,23 @@ class HTTPIDownload:
             if not self._progress['size']:
               self._progress['size'] = self._progress['downloaded']
               self._progress['percent'] = 100
+              self._progress['eventing']['condition'].notify_all()
           break
         with self._flock:
           self._file.write(b)
           with self._progress['eventing']['condition']:
-            self._progress['downloaded'] += len(b)
             if self._progress['size']:
+              self._progress['downloaded'] += len(b)
               p = self._progress['percent']
               self._progress['percent'] = math.floor(self._progress['downloaded'] / self._progress['size'] * 100)
               if p != self._progress['percent']:
-                self._progress['eventing']['percent'] = True
+                self._progress['eventing']['progression'] = True
+                self._progress['eventing']['condition'].notify_all()
+            else:
+              d = self._progress['downloaded']
+              self._progress['downloaded'] += len(b)
+              if d // self._bsize != self._progress['downloaded'] // self._bsize:
+                self._progress['eventing']['progression'] = True
                 self._progress['eventing']['condition'].notify_all()
     except:
       return
@@ -5127,7 +5153,7 @@ class HTTPIDownload:
             with self._progress['eventing']['condition']:
               self._progress['status'] = 'working (split: yes)'
               self._progress['eventing']['status'] = True
-              self._progress['eventing']['percent'] = True
+              self._progress['eventing']['progression'] = True
               self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
               self._progress['eventing']['workers'] = True
               self._progress['eventing']['condition'].notify_all()
@@ -5144,7 +5170,7 @@ class HTTPIDownload:
         with self._progress['eventing']['condition']:
           self._progress['status'] = 'working (split: no)'
           self._progress['eventing']['status'] = True
-          self._progress['eventing']['percent'] = True
+          self._progress['eventing']['progression'] = True
           self._progress['eventing']['condition'].notify_all()
         th = threading.Thread(target=self._sdown, args=(rep,))
         self._threads.append(th)
@@ -5204,8 +5230,6 @@ class HTTPIDownload:
     with self._progress['eventing']['condition']:
       if self._progress['status'] == 'completed':
         return '█' * length
-      elif self._progress['status'] == 'aborted' and not hasattr(self, '_condition'):
-        return '░' * length
       elif hasattr(self, '_condition'):
         cs = cb = 0
         return ''.join('█' * (b := math.floor(sec['downloaded'] * (bl := (-cb + (cb := round(length * (cs := cs + sec['size']) / self.progress['size'])))) / sec['size'])) + '░' * (bl - b) for sec in self.progress['sections'])
@@ -5223,9 +5247,9 @@ class HTTPIDownload:
 
   def wait_progression(self, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or (self._progress['status'] == 'working (split: no)' and not self._progress['size']) or self._progress['eventing']['percent']), timeout)
-      self._progress['eventing']['percent'] = False
-      return self._progress['percent']
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression']), timeout)
+      self._progress['eventing']['progression'] = False
+      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%d o' % format(self._progress['downloaded'], ',d')
 
   def wait_workers(self, timeout=None):
     with self._progress['eventing']['condition']:
@@ -5241,10 +5265,10 @@ class HTTPIDownload:
 
   def wait_progress_bar(self, length=100, timeout=None):
     with self._progress['eventing']['condition']:
-      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or (self._progress['status'] == 'working (split: no)' and not self._progress['size']) or self._progress['eventing']['percent'] or self._progress['eventing']['workers']), timeout)
-      self._progress['eventing']['percent'] = False
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression'] or self._progress['eventing']['workers']), timeout)
+      self._progress['eventing']['progression'] = False
       self._progress['eventing']['workers'] = False
-      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent'])
+      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent']) if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], ',d')
 
   def __enter__(self):
     self.start()

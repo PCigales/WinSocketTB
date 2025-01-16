@@ -5,7 +5,7 @@ browser.downloads.onCreated.addListener(
   function (item) {
     const rid = url_rid.get(item.url);
     if (! rid) {return;}
-    browser.runtime.sendNativeMessage("httpidownload", {url: rid_url.get(rid), file: item.filename, headers: rid_headers.get(rid)}).then(
+    browser.runtime.sendNativeMessage("httpidownload", {did: item.id, url: rid_url.get(rid), file: item.filename, headers: rid_headers.get(rid)}).then(
       function (response) {if (response) {browser.downloads.cancel(item.id).catch(() => null);}},
       function (error) {() => null}
     );
