@@ -20,3 +20,8 @@ browser.webRequest.onSendHeaders.addListener(
   {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "other"]},
   ["requestHeaders"]
 );
+browser.action.onClicked.addListener(
+  function (tab, click) {
+    browser.tabs.query({windowId: tab.windowId, url: browser.runtime.getURL("httpidownload.html")}).then(function (tabs) {if (tabs.length) {browser.tabs.update(tabs[0].id, {active: true});} else {browser.tabs.create({url: "httpidownload.html"});}});
+  }
+);

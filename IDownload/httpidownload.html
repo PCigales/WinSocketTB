@@ -32,7 +32,8 @@
       #downloads {
         max-width: 100%;
         margin: 0;
-        padding: 1.5em;
+        padding-left: 2em;
+        padding-right: 1.5em;
       }
       #download_pattern {
         display: none;
@@ -43,6 +44,24 @@
         padding-top: 1em;
         padding-bottom: 1em;
         border-bottom: solid 1px rgba(255, 255, 255, 0.2);
+      }
+      li.working {
+        list-style-type: "\1f86b\00a0\00a0";
+      }
+      li.working::marker {
+        color: dodgerblue;
+      }
+      li.completed {
+        list-style-type: "\2714\00a0\00a0";
+      }
+      li.completed::marker {
+        color: limegreen;
+      }
+      li.aborted {
+        list-style-type: "\2716\00a0\00a0";
+      }
+      li.aborted::marker {
+        color: crimson;
       }
       li>div::before {
         content: attr(class)": ";
@@ -66,7 +85,7 @@
         justify-content: flex-start;
         align-items: center;
         align-content: center;
-        width: calc(100% - 11em);
+        width: calc(100% - 9em);
         vertical-align: text-bottom;
       }
       .bar:empty {
@@ -108,17 +127,12 @@
     </ul>
     <script>
       "use strict";
-      let socket;
       const num_form = Intl.NumberFormat();
-      function new_socket() {
-        console.log("n");
-        if (socket) {socket.onerror = socket.onclose = null; document.getElementById("connected").classList.add("not");}
-        socket = new WebSocket("ws://localhost:9009/monitor");
-        socket.onopen = function () {document.getElementById("connected").classList.remove("not");};
-        socket.onerror = socket.onclose = new_socket;
-        socket.onmessage = function(event) {
-          const progression = JSON.parse(event.data);
-          const did = "download" + progression.did.toString();
+      const downloads = new Map();      
+      let latest_update = -1000;
+      let socket;
+      function update() {
+        for (const [did, progression] of downloads) {
           let download = document.getElementById(did);
           if (! download) {
             download = document.getElementById("download_pattern").cloneNode(true);
@@ -127,6 +141,7 @@
             download.getElementsByClassName("file")[0].innerText = progression.file;
             document.getElementById("downloads").prepend(download);
           }
+          download.className = progression.progress.status.split(" ")[0];
           download.getElementsByClassName("size")[0].innerText = (progression.progress.status == "completed" || progression.progress.size) ? num_form.format(progression.progress.size) : "";
           download.getElementsByClassName("status")[0].innerText = progression.progress.status;
           download.getElementsByClassName("downloaded")[0].innerText = num_form.format(progression.progress.downloaded);
@@ -135,6 +150,20 @@
           if (progression.progress.status == "aborted" || progression.progress.status == "completed") {
             download.getElementsByClassName("stop")[0].disabled = true;
           }
+        }
+        downloads.clear();
+        latest_update = performance.now();
+      }
+      function new_socket() {
+        console.log("n");
+        if (socket) {socket.onerror = socket.onclose = null; document.getElementById("connected").classList.add("not");}
+        socket = new WebSocket("ws://localhost:9009/monitor");
+        socket.onopen = function () {document.getElementById("connected").classList.remove("not");};
+        socket.onerror = socket.onclose = new_socket;
+        socket.onmessage = function(event) {
+          const progression = JSON.parse(event.data);
+          downloads.set("download" + progression.did.toString(), progression);
+          setTimeout(update, Math.max(0, latest_update + 1000 - performance.now()));
         };
         window.onbeforeunload = function () {
           socket.onerror = socket.onclose = null;

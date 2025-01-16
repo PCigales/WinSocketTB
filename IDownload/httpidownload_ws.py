@@ -76,15 +76,19 @@ DownloadsDSReport.server = DownloadsWSServer
 DownloadsDSMonitor = DownloadsDSReport.monitor_datastore
 DownloadsWSServer.open('/report', DownloadsDSReport)
 DownloadsWSServer.open('/monitor', DownloadsDSMonitor)
-DownloadsWSServer.close_event.wait(10)
+DownloadsWSServer.close_event.set()
 while True:
-  with DownloadsWSServer.lock:
-    if not any(not h.closed for c in DownloadsWSServer.channels.values() for h in c.handlers):
-      time.sleep(5)
-      if not any(not h.closed for c in DownloadsWSServer.channels.values() for h in c.handlers):
-        DownloadsWSServer.close('/report', timeout=1, block_on_close=True)
-        DownloadsWSServer.close('/monitor', timeout=1, block_on_close=True)
-        break
-  DownloadsWSServer.close_event.clear()
   DownloadsWSServer.close_event.wait()
+  DownloadsWSServer.close_event.clear()
+  with DownloadsWSServer.lock:
+    if any(not h.closed for c in DownloadsWSServer.channels.values() for h in c.handlers):
+      continue
+  if DownloadsWSServer.close_event.wait(10):
+    continue
+  with DownloadsWSServer.lock:
+    if any(not h.closed for c in DownloadsWSServer.channels.values() for h in c.handlers):
+      continue
+    DownloadsWSServer.close('/report', timeout=1, block_on_close=True)
+    DownloadsWSServer.close('/monitor', timeout=1, block_on_close=True)
+  break
 DownloadsWSServer.shutdown(timeout=1, block_on_close=True)

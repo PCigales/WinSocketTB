@@ -11,11 +11,15 @@
       "id": "{78cb9e53-bb02-5cba-b0ce-95e5e5171dd3}"
     }
   },
-  "permissions": ["downloads", "webRequest", "nativeMessaging"],
+  "permissions": ["downloads", "webRequest", "nativeMessaging", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["script.js"],
     "type": "module"
+  },
+  "action": {
+    "default_title": "HTTPIDownload",
+    "default_icon": "icon_48.png"
   }
 }
 
