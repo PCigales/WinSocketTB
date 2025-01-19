@@ -4558,7 +4558,6 @@ class WebSocketIDServer(TCPIDServer):
       except:
         pass
     if not self._wait_threads(channel.handlers.values(), timeout):
-      # print('ccc')
       with self.lock:
         for h in channel.handlers:
           h.connection.shutclose()
