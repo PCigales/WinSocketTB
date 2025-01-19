@@ -27,7 +27,7 @@ browser.downloads.onCreated.addListener(
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
     Promise.all([get_sid, browser.storage.session.set({["download" + did.toString()]: dinf})]).then(
       function ([sid]) {
-        browser.runtime.sendNativeMessage("httpidownload", {sid, did, ...dinf}).then(
+        browser.runtime.sendNativeMessage("idownload", {sid, did, ...dinf}).then(
           function (response) {if (response) {browser.downloads.cancel(did).catch(Boolean);}},
           function () {}
         );
@@ -39,9 +39,9 @@ browser.action.onClicked.addListener(
   function (tab, click) {
     get_sid.then(
       function (sid) {
-        browser.tabs.query({url: browser.runtime.getURL("httpidownload.html?sid=" + sid.toString())}).then(
+        browser.tabs.query({url: browser.runtime.getURL("manager.html?sid=" + sid.toString())}).then(
           function (tabs) {
-            (tabs.length ? browser.windows.update(tabs[0].windowId, {focused: true}) : Promise.reject()).catch(function () {browser.windows.create({type: "popup", url: "httpidownload.html?sid=" + sid.toString()});});
+            (tabs.length ? browser.windows.update(tabs[0].windowId, {focused: true}) : Promise.reject()).catch(function () {browser.windows.create({type: "popup", url: "manager.html?sid=" + sid.toString()});});
           }
         );
       }
@@ -52,9 +52,9 @@ browser.runtime.onMessage.addListener(
   function (message, sender, respond) {
     get_sid.then(
       function (sid) {
-        if (sender.url != browser.runtime.getURL("httpidownload.html?sid=" + sid.toString())) {return;}
+        if (sender.url != browser.runtime.getURL("manager.html?sid=" + sid.toString())) {return;}
         if (message.hasOwnProperty("explorer")) {
-          browser.runtime.sendNativeMessage("httpidownload", message).then(
+          browser.runtime.sendNativeMessage("idownload", message).then(
             function (response) {respond(response);},
             function () {respond(false);}
           );
@@ -64,7 +64,7 @@ browser.runtime.onMessage.addListener(
         browser.storage.session.get(did).then(
           function (results) {
             const dinf = results[did];
-            browser.runtime.sendNativeMessage("httpidownload", {sid, did: parseInt(did.substring(8)), ...dinf, progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
+            browser.runtime.sendNativeMessage("idownload", {sid, did: parseInt(did.substring(8)), ...dinf, progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
               function (response) {respond(response);},
               function () {respond(false);}
             );

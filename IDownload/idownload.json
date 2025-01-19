@@ -1,7 +1,7 @@
 {
-  "name": "httpidownload",
+  "name": "idownload",
   "description": "Interruptible download script",
-  "path": "httpidownload.bat",
+  "path": "idownload.bat",
   "type": "stdio",
 "allowed_extensions": ["{78cb9e53-bb02-5cba-b0ce-95e5e5171dd3}"]
 }

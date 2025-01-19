@@ -15,7 +15,7 @@
   "permissions": ["downloads", "webRequest", "nativeMessaging", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": {
-    "scripts": ["script.js"],
+    "scripts": ["background.js"],
     "type": "module"
   },
   "content_security_policy": {

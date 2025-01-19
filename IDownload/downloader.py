@@ -86,7 +86,7 @@ def connect(download_ds):
   while True:
     if (DownloadWSClient := WebSocketIDClient('ws://localhost:9009/report', download_ds, connection_timeout=to, idsocket_generator=IDSockGen)) is None:
       to = 1
-      process = subprocess.Popen(('py', os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), 'httpidownload_ws.py')), creationflags=(subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_CONSOLE), stderr=subprocess.PIPE)
+      process = subprocess.Popen(('py', os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), 'websocket.py')), creationflags=(subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_CONSOLE), stderr=subprocess.PIPE)
       if process.stderr.read(1) != b'0':
         if download_ds.before_shutdown:
           return
