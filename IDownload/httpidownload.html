@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en-GB">
   <head>
     <meta charset="utf-8">
@@ -25,9 +25,9 @@
         left: 0.5em;
         top: 0.5em;
         font-size: 120%;
-      }
-      #connected.not {
-        animation: blink 2s ease-in-out 0s infinite normal;
+        &.not {
+          animation: blink 2s ease-in-out 0s infinite normal;
+        }
       }
       #downloads {
         max-width: 100%;
@@ -44,70 +44,90 @@
         padding-top: 1em;
         padding-bottom: 1em;
         border-bottom: solid 1px rgba(255, 255, 255, 0.2);
-      }
-      li.working {
-        list-style-type: "\1f86b\00a0\00a0";
-      }
-      li.working::marker {
-        color: dodgerblue;
-      }
-      li.completed {
-        list-style-type: "\2714\00a0\00a0";
-      }
-      li.completed::marker {
-        color: limegreen;
-      }
-      li.aborted {
-        list-style-type: "\2716\00a0\00a0";
-      }
-      li.aborted::marker {
-        color: crimson;
-      }
-      li>div::before {
-        content: attr(class)": ";
-        display: inline-block;
-        text-transform: capitalize;
-        width: 6em;
-      }
-      li>div {
-        margin-right: 1em;
-        text-indent: hanging 6em;
-      }
-      .size:not(:empty)::after, .downloaded:not(:empty)::after {
-        content: " o";
-      }
-      .size:empty::after, .downloaded:empty::after {
-        content: "?";
-      }
-      .bar {
-        display: inline-flex;
-        flex-flow: row nowrap;
-        justify-content: flex-start;
-        align-items: center;
-        align-content: center;
-        width: calc(100% - 9em);
-        vertical-align: text-bottom;
-      }
-      .bar:empty {
-        display: none;
-      }
-      .percent:not(:empty) {
-        display: inline-block;
-        width: 3em;
-        text-align: right;
-      }
-      .percent:not(:empty)::after {
-        content: "%";
-      }
-      .percent:empty::after {
-        content: "?";
-      }
-      progress {
-        min-width: 0;
-        max-width: none;
-      }
-      button {
-        margin-top: 0.5em;
+        &.working {
+          list-style-type: "\1f86b\00a0\00a0";
+          &::marker {
+            color: dodgerblue;
+          }
+          &>button.discard {
+            display: revert;
+          }
+          &:has(>div.progression>span.bar:not(:empty))>button.suspend {
+            display: revert;
+          }
+        }
+        &.completed {
+          list-style-type: "\2714\00a0\00a0";
+          &::marker {
+            color: limegreen;
+          }
+        }
+        &.aborted {
+          list-style-type: "\2716\00a0\00a0";
+          &::marker {
+            color: crimson;
+          }
+          &>button.restart {
+            display: revert;
+          }
+          &:has(>div.progression>span.bar:not(:empty))>button.resume {
+            display: revert;
+          }
+        }
+        &>div {
+          margin-right: 1em;
+          text-indent: hanging 6em;
+          &::before {
+            content: attr(class)": ";
+            display: inline-block;
+            text-transform: capitalize;
+            width: 6em;
+          }
+          &:is(.size, .downloaded) {
+            &:not(:empty)::after {
+              content: " o";
+            }
+            &:empty::after {
+              content: "?";
+            }
+          }
+          &.progression {
+            &>span.bar {
+              display: inline-flex;
+              flex-flow: row nowrap;
+              justify-content: flex-start;
+              align-items: center;
+              align-content: center;
+              width: calc(100% - 9em);
+              vertical-align: text-bottom;
+              &:empty {
+                display: none;
+              }
+              &>progress {
+                min-width: 0;
+                max-width: none;
+              }
+            }
+            &>span.percent {
+              &:not(:empty)::after {
+                content: "%";
+              }
+              &:empty::after {
+                content: "?";
+              }
+            }
+            &>span.bar:not(:empty)+span.percent:not(:empty) {
+              display: inline-block;
+              width: 3em;
+              text-align: right;
+            }
+          }
+        }
+        &>button {
+          display: none;
+          margin-top: 0.5em;
+          margin-right: 1em;
+        }
       }
     </style>
   </head>
@@ -121,60 +141,10 @@
         <div class="size"></div>
         <div class="status"></div>
         <div class="downloaded"></div>
-        <div class="progression"><span class="bar"></span><span class="percent"></div>
-        <button class="stop" onclick="send_stop(this.parentNode.id)">Stop</button>
+        <div class="progression"><span class="bar"></span><span class="percent"></span></div>
+        <button class="discard">Discard</button><button class="restart">Restart</button><button class="suspend">Suspend</button><button class="resume">Resume</button>
       </li>
     </ul>
-    <script>
-      "use strict";
-      const num_form = Intl.NumberFormat();
-      const downloads = new Map();      
-      let latest_update = -1000;
-      let socket;
-      function update() {
-        for (const [did, progression] of downloads) {
-          let download = document.getElementById(did);
-          if (! download) {
-            download = document.getElementById("download_pattern").cloneNode(true);
-            download.id = did;
-            download.getElementsByClassName("url")[0].innerText = progression.url;
-            download.getElementsByClassName("file")[0].innerText = progression.file;
-            document.getElementById("downloads").prepend(download);
-          }
-          download.className = progression.progress.status.split(" ")[0];
-          download.getElementsByClassName("size")[0].innerText = (progression.progress.status == "completed" || progression.progress.size) ? num_form.format(progression.progress.size) : "";
-          download.getElementsByClassName("status")[0].innerText = progression.progress.status;
-          download.getElementsByClassName("downloaded")[0].innerText = num_form.format(progression.progress.downloaded);
-          download.getElementsByClassName("bar")[0].innerHTML = progression.progress.sections ? progression.progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : (progression.progress.size ? `<progress max="${progression.progress.size}" value="${progression.progress.downloaded}" style="flex: 1 1 1px"></progress>` : (progression.progress.status == "completed" ? `<progress max="1" value="1" style="flex: 1 1 1px"></progress>` : ""));
-          download.getElementsByClassName("percent")[0].innerText = (progression.progress.status == "completed" || progression.progress.size) ? progression.progress.percent.toString() : "";
-          if (progression.progress.status == "aborted" || progression.progress.status == "completed") {
-            download.getElementsByClassName("stop")[0].disabled = true;
-          }
-        }
-        downloads.clear();
-        latest_update = performance.now();
-      }
-      function new_socket() {
-        console.log("n");
-        if (socket) {socket.onerror = socket.onclose = null; document.getElementById("connected").classList.add("not");}
-        socket = new WebSocket("ws://localhost:9009/monitor");
-        socket.onopen = function () {document.getElementById("connected").classList.remove("not");};
-        socket.onerror = socket.onclose = new_socket;
-        socket.onmessage = function(event) {
-          const progression = JSON.parse(event.data);
-          downloads.set("download" + progression.did.toString(), progression);
-          setTimeout(update, Math.max(0, latest_update + 1000 - performance.now()));
-        };
-        window.onbeforeunload = function () {
-          socket.onerror = socket.onclose = null;
-          socket.close();
-        };
-        return socket;
-      }
-      function send_stop(did) {
-        socket.send("stop " + did.substring(8));
-      }
-      new_socket();
-    </script>
+    <script src="httpidownload.js"></script>
   </body>
 </html>

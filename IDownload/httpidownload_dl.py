@@ -21,7 +21,8 @@ try:
   url = message['url']
   file = message['file']
   dfile = file + '.idownload'
-  download = HTTPIDownload(url, dfile, headers=dict(map(dict.values, message['headers'])))
+  headers = dict(map(dict.values, message['headers']))
+  download = HTTPIDownload(url, dfile, headers=headers, resume=message.get('sections'))
   if not download:
     raise
   download.start()
@@ -40,8 +41,11 @@ finally:
 sys.stdin = open('con', 'r')
 sys.stdout = open('con', 'w')
 sys.stderr = open('con', 'w')
+download.sid = message['sid']
 download.did = message['did']
 download.path = file
+download.headers = headers
+download.suspended = False
 
 
 class DownloadReportDS(WebSocketDataStore):
@@ -54,10 +58,14 @@ class DownloadReportDS(WebSocketDataStore):
 
   @getattr(property(), 'setter')
   def progress(self, value):
-    self.set_outgoing(0, json.dumps({'did': self.download.did, 'url': self.download.url, 'file': self.download.path, 'progress': value}, separators=(',', ':')))
+    value.pop('workers', None)
+    self.set_outgoing(0, json.dumps({'sid': self.download.sid, 'did': self.download.did, 'progress': value}, separators=(',', ':')))
 
   def add_incoming(self, value):
-    if value == 'stop %d' % self.download.did:
+    if value == 'discard %d' % self.download.did:
+      self.download.stop()
+    elif value == 'suspend %d' % self.download.did:
+      self.download.suspended = True
       self.download.stop()
 
 
@@ -95,9 +103,10 @@ if started and st != 'completed':
     print('progression: %s' % download.wait_progress_bar(100), end='\b'*118, flush=True)
     DownloadDS.progress = download.progress
   print('progression: %s' % download.wait_progress_bar(100))
+suspended = download.suspended
 print('status:', st)
-DownloadDS.progress = download.progress
-if started and st == 'completed':
+DownloadDS.progress = download.progress if st != 'aborted' or suspended else {'status': 'aborted', 'size': download.progress['size'], 'downloaded': 0, 'percent': 0}
+if st == 'completed':
   while True:
     try:
       os.rename(dfile, file)
@@ -113,7 +122,7 @@ if started and st == 'completed':
         os.remove(file)
       except:
         time.sleep(0.5)
-else:
+elif not suspended:
   while True:
     try:
       os.remove(dfile)
