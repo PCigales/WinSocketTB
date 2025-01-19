@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "idownload",
+  "name": "IDownload",
   "version": "1.0",
-  "description": "Interruptible download extension",
+  "description": "Interruptible downloader extension",
   "homepage_url": "https://github.com/PCigales/WinSocketTB",
   "icons": {
     "48": "icon_48.png"
@@ -12,7 +12,7 @@
       "id": "{78cb9e53-bb02-5cba-b0ce-95e5e5171dd3}"
     }
   },
-  "permissions": ["downloads", "webRequest", "nativeMessaging", "tabs", "storage"],
+  "permissions": ["downloads", "webRequest", "nativeMessaging", "storage"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["script.js"],
@@ -22,7 +22,7 @@
     "extension_pages": "script-src 'self';"
   },
   "action": {
-    "default_title": "HTTPIDownload",
+    "default_title": "IDownload",
     "default_icon": "icon_48.png"
   }
 }

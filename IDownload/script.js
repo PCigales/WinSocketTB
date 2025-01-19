@@ -23,21 +23,12 @@ browser.downloads.onCreated.addListener(
     const rid = url_rid.get(item.url);
     if (! rid) {return;}
     const inf = rid_inf.get(rid);
-    get_sid.then(
-      function (sid) {
-        const did = item.id;
-        const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
+    const did = item.id;
+    const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
+    Promise.all([get_sid, browser.storage.session.set({["download" + did.toString()]: dinf})]).then(
+      function ([sid]) {
         browser.runtime.sendNativeMessage("httpidownload", {sid, did, ...dinf}).then(
-          function (response) {
-            if (response) {browser.downloads.cancel(did).catch(Boolean);}
-            browser.storage.session.set({["download" + did.toString()]: dinf}).then(() => browser.storage.session.get("downloads")).then(
-              function (results) {
-                const downloads = results.hasOwnProperty("downloads") ? results.downloads : [];
-                downloads.push(did);
-                browser.storage.session.set({downloads});
-              }
-            );
-          },
+          function (response) {if (response) {browser.downloads.cancel(did).catch(Boolean);}},
           function () {}
         );
       }
@@ -48,9 +39,9 @@ browser.action.onClicked.addListener(
   function (tab, click) {
     get_sid.then(
       function (sid) {
-        browser.tabs.query({windowId: tab.windowId, url: browser.runtime.getURL("httpidownload.html?sid=" + sid.toString())}).then(
+        browser.tabs.query({url: browser.runtime.getURL("httpidownload.html?sid=" + sid.toString())}).then(
           function (tabs) {
-            (tabs.length ? browser.tabs.update(tabs[0].id, {active: true}) : Promise.reject()).catch(function () {browser.tabs.create({url: "httpidownload.html?sid=" + sid.toString()});});
+            (tabs.length ? browser.windows.update(tabs[0].windowId, {focused: true}) : Promise.reject()).catch(function () {browser.windows.create({type: "popup", url: "httpidownload.html?sid=" + sid.toString()});});
           }
         );
       }
@@ -62,18 +53,25 @@ browser.runtime.onMessage.addListener(
     get_sid.then(
       function (sid) {
         if (sender.url != browser.runtime.getURL("httpidownload.html?sid=" + sid.toString())) {return;}
-        browser.storage.session.get(message.did).then(
+        if (message.hasOwnProperty("explorer")) {
+          browser.runtime.sendNativeMessage("httpidownload", message).then(
+            function (response) {respond(response);},
+            function () {respond(false);}
+          );
+          return
+        }
+        const did = message.did;
+        browser.storage.session.get(did).then(
           function (results) {
-            if (! results[message.did]) {
-              browser.runtime.sendNativeMessage("httpidownload", {did: message.did, url: message.url, file: message.file, headers: message.headers, sections: message.sections}).then(
-                function (response) {respond(response);},
-                function (error) {respond(false);}
-              );
-            }
-          },
-          function (error) {}
+            const dinf = results[did];
+            browser.runtime.sendNativeMessage("httpidownload", {sid, did: parseInt(did.substring(8)), ...dinf, progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
+              function (response) {respond(response);},
+              function () {respond(false);}
+            );
+          }
         );
       }
     );
+    return true;
   }
 );

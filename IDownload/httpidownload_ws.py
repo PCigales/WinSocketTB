@@ -27,7 +27,7 @@ class DownloadsMonitorDS(WebSocketDataStore):
 
   @getattr(property(), 'setter')
   def progress(self, value):
-    self.set_outgoing(self.downloads.setdefault(json.loads(value)['did'], len(self.downloads)), value)
+    self.set_outgoing(self.downloads.setdefault(tuple(d[k] for d in (json.loads(value),) for k in ('sid', 'did')), len(self.downloads)), value)
 
   def add_incoming(self, value):
     self.report_datastore.command = value

@@ -4558,9 +4558,10 @@ class WebSocketIDServer(TCPIDServer):
       except:
         pass
     if not self._wait_threads(channel.handlers.values(), timeout):
+      # print('ccc')
       with self.lock:
-        for idsock in channel.idsockets:
-          idsock.shutclose()
+        for h in channel.handlers:
+          h.connection.shutclose()
       if block:
         self._wait_threads(channel.handlers.values())
     if not block:
@@ -5249,7 +5250,7 @@ class HTTPIDownload:
     with self._progress['eventing']['condition']:
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression']), timeout)
       self._progress['eventing']['progression'] = False
-      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%d o' % format(self._progress['downloaded'], ',d')
+      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], ',d')
 
   def wait_workers(self, timeout=None):
     with self._progress['eventing']['condition']:

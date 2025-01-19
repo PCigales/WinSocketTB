@@ -11,6 +11,17 @@ try:
   if not (length := int.from_bytes(sys.stdin.buffer.read(4), sys.byteorder)):
     raise
   message = json.loads(sys.stdin.buffer.read(length))
+  if 'explorer' in message:
+    started = True
+    path = message['explorer']
+    if os.path.isfile(path):
+      subprocess.run('explorer /select,' + path)
+    else:
+      path = os.path.dirname(path)
+      if not os.path.isdir(path):
+        raise
+      os.startfile(path, 'explore')
+    exit(0)
   try:
     from SocketTB import HTTPIDownload, WebSocketDataStore, IDAltSocketGenerator, WebSocketIDClient
   except:
@@ -22,7 +33,7 @@ try:
   file = message['file']
   dfile = file + '.idownload'
   headers = dict(map(dict.values, message['headers']))
-  download = HTTPIDownload(url, dfile, headers=headers, resume=message.get('sections'))
+  download = HTTPIDownload(url, dfile, headers=headers, resume=message.get('progress'))
   if not download:
     raise
   download.start()

@@ -34,6 +34,7 @@
         margin: 0;
         padding-left: 2em;
         padding-right: 1.5em;
+        white-space: nowrap;
       }
       #download_pattern {
         display: none;
@@ -80,8 +81,8 @@
           &::before {
             content: attr(class)": ";
             display: inline-block;
-            text-transform: capitalize;
             width: 6em;
+            text-transform: capitalize;
           }
           &:is(.size, .downloaded) {
             &:not(:empty)::after {
@@ -98,7 +99,7 @@
               justify-content: flex-start;
               align-items: center;
               align-content: center;
-              width: calc(100% - 9em);
+              width: max(10em, 100% - 9em);
               vertical-align: text-bottom;
               &:empty {
                 display: none;
@@ -124,9 +125,12 @@
           }
         }
         &>button {
-          display: none;
           margin-top: 0.5em;
           margin-right: 1em;
+          width: 5em;
+          &:not(.explorer) {
+            display: none;
+          }
         }
       }
     </style>
@@ -142,7 +146,7 @@
         <div class="status"></div>
         <div class="downloaded"></div>
         <div class="progression"><span class="bar"></span><span class="percent"></span></div>
-        <button class="discard">Discard</button><button class="restart">Restart</button><button class="suspend">Suspend</button><button class="resume">Resume</button>
+        <button class="explorer">Explorer</button><button class="discard">Discard</button><button class="restart">Restart</button><button class="suspend">Suspend</button><button class="resume">Resume</button>
       </li>
     </ul>
     <script src="httpidownload.js"></script>
