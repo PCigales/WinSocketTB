@@ -4,7 +4,8 @@ const num_form = Intl.NumberFormat();
 const progresses = new Map();
 const updating = [new Set(), -1000];
 const creating = [new Set(), true];
-let socket;
+var port;
+var socket;
 function set_progress(did) {
   const progress = progresses.get(did);
   const download = document.getElementById(did);
@@ -39,7 +40,7 @@ function update() {
 }
 function new_socket() {
   if (socket) {socket.onerror = socket.onclose = null; document.getElementById("connected").classList.add("not");}
-  socket = new WebSocket("ws://localhost:9009/monitor");
+  socket = new WebSocket(`ws://localhost:${port}/monitor`);
   socket.onopen = function () {document.getElementById("connected").classList.remove("not");};
   socket.onerror = socket.onclose = new_socket;
   socket.onmessage = function(event) {
@@ -92,6 +93,13 @@ function send_command() {
 }
 browser.tabs.query({url: browser.runtime.getURL(location.href)}).then(
   function (tabs) {
-    if (tabs.length > 1) {browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});} else {new_socket();}
+    if (tabs.length > 1) {
+      browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});
+    } else {
+      browser.storage.local.get({port: 9009}).then(
+        function (results) {port = results.port;},
+        function () {port = 9009;}
+      ).then(new_socket);
+    }
   }
 );

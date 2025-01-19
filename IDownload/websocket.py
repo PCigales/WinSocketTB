@@ -61,7 +61,7 @@ class DownloadsWSRequestHandler(WebSocketRequestHandler):
 sys.stdin = open('con', 'r')
 sys.stdout = open('con', 'w')
 try:
-  DownloadsWSServer = WebSocketIDAltServer(('localhost', 9009), DownloadsWSRequestHandler)
+  DownloadsWSServer = WebSocketIDAltServer(('localhost', int(sys.argv[1])), DownloadsWSRequestHandler)
   DownloadsWSServer.start()
   sys.stderr.buffer.write(b'0')
   sys.stderr.buffer.flush()

@@ -25,9 +25,9 @@ browser.downloads.onCreated.addListener(
     const inf = rid_inf.get(rid);
     const did = item.id;
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
-    Promise.all([get_sid, browser.storage.session.set({["download" + did.toString()]: dinf})]).then(
-      function ([sid]) {
-        browser.runtime.sendNativeMessage("idownload", {sid, did, ...dinf}).then(
+    Promise.all([browser.storage.local.get({port: 9009}), get_sid, browser.storage.session.set({["download" + did.toString()]: dinf})]).then(
+      function ([results, sid]) {
+        browser.runtime.sendNativeMessage("idownload", {...results, sid, did, ...dinf}).then(
           function (response) {if (response) {browser.downloads.cancel(did).catch(Boolean);}},
           function () {}
         );
@@ -61,10 +61,9 @@ browser.runtime.onMessage.addListener(
           return
         }
         const did = message.did;
-        browser.storage.session.get(did).then(
-          function (results) {
-            const dinf = results[did];
-            browser.runtime.sendNativeMessage("idownload", {sid, did: parseInt(did.substring(8)), ...dinf, progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
+        Promise.all([browser.storage.local.get({port: 9009}), browser.storage.session.get(did)]).then(
+          function ([results1, results2]) {
+            browser.runtime.sendNativeMessage("idownload", {...results1, sid, did: parseInt(did.substring(8)), ...results2[did], progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
               function (response) {respond(response);},
               function () {respond(false);}
             );

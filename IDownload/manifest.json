@@ -24,6 +24,9 @@
   "action": {
     "default_title": "IDownload",
     "default_icon": "icon_48.png"
+  },
+  "options_ui": {
+    "page": "options.html"
   }
 }
 
