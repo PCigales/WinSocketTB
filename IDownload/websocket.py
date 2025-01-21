@@ -3,7 +3,6 @@ import json
 import os.path
 import threading
 import time
-import ctypes, ctypes.wintypes
 
 
 try:
