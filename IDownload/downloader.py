@@ -32,13 +32,13 @@ try:
   url = message['url']
   file = message['file']
   dfile = file + '.idownload'
-  headers = dict(map(dict.values, message['headers']))
-  download = HTTPIDownload(url, dfile, headers=headers, resume=message.get('progress'))
+  progress = message.get('progress')
+  download = HTTPIDownload(url, dfile, headers=dict(map(dict.values, message['headers'])), max_workers=message['maxsecs'], section_min=message['secmin']*1048576, resume=progress)
   if not download:
     raise
   download.start()
   download.wait_progression()
-  started = (st := download.wait_finish(0)) != 'aborted'
+  started = (st := download.progress['status']) != 'aborted'
 except:
   started = False
   exit(1)
@@ -52,11 +52,8 @@ finally:
 sys.stdin = open('con', 'r')
 sys.stdout = open('con', 'w')
 sys.stderr = open('con', 'w')
-download.sid = message['sid']
-download.did = message['did']
-download.path = file
-download.headers = headers
-download.suspended = False
+download.sdid = message['sdid']
+download.suspended = not started and progress is not None
 
 
 class DownloadReportDS(WebSocketDataStore):
@@ -70,12 +67,12 @@ class DownloadReportDS(WebSocketDataStore):
   @getattr(property(), 'setter')
   def progress(self, value):
     value.pop('workers', None)
-    self.set_outgoing(0, json.dumps({'sid': self.download.sid, 'did': self.download.did, 'progress': value}, separators=(',', ':')))
+    self.set_outgoing(0, json.dumps({'sdid': self.download.sdid, 'progress': value}, separators=(',', ':')))
 
   def add_incoming(self, value):
-    if value == 'discard %d' % self.download.did:
+    if value == 'discard %s' % self.download.sdid:
       self.download.stop()
-    elif value == 'suspend %d' % self.download.did:
+    elif value == 'suspend %s' % self.download.sdid:
       self.download.suspended = True
       self.download.stop()
 
@@ -84,9 +81,9 @@ def connect(port, download_ds):
   IDSockGen = IDAltSocketGenerator()
   to = 0.2
   while True:
-    if (DownloadWSClient := WebSocketIDClient('ws://localhost:%s/report' % port, download_ds, connection_timeout=to, idsocket_generator=IDSockGen)) is None:
+    if (DownloadWSClient := WebSocketIDClient('ws://localhost:%d/report' % port, download_ds, headers={'X-Request-Id': download_ds.download.sdid}, connection_timeout=to, idsocket_generator=IDSockGen)) is None:
       to = 1
-      process = subprocess.Popen(('py', os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), 'websocket.py'), port), creationflags=(subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_CONSOLE), stderr=subprocess.PIPE)
+      process = subprocess.Popen(('py', os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', ' '))), 'websocket.py'), str(port)), creationflags=(subprocess.CREATE_BREAKAWAY_FROM_JOB | subprocess.CREATE_NEW_CONSOLE), stderr=subprocess.PIPE)
       if process.stderr.read(1) != b'0':
         if download_ds.before_shutdown:
           return
@@ -110,9 +107,12 @@ DownloadDS.progress = download.progress
 if started and st != 'completed':
   print('status:', st)
   print('progression: %s' % download.wait_progress_bar(100, 0), end='\b'*118, flush=True)
-  while (st := download.wait_finish(0)) not in ('completed', 'aborted'):
+  while True:
     print('progression: %s' % download.wait_progress_bar(100), end='\b'*118, flush=True)
-    DownloadDS.progress = download.progress
+    progress = download.progress
+    if (st := progress['status']) in ('completed', 'aborted'):
+      break
+    DownloadDS.progress = progress
   print('progression: %s' % download.wait_progress_bar(100))
 suspended = download.suspended
 print('status:', st)
@@ -121,13 +121,11 @@ if st == 'completed':
   while True:
     try:
       os.rename(dfile, file)
-      print()
-      print('renamed:', file)
+      print('\r\nrenamed:', file)
       break
     except:
       if not os.path.isfile(dfile):
-        print()
-        print('missing:', dfile)
+        print('\r\nmissing:', dfile)
         break
       try:
         os.remove(file)
@@ -146,8 +144,7 @@ elif not suspended:
 while msvcrt.kbhit():
   if msvcrt.getch() == b'\xe0':
     msvcrt.getch()
-print()
-print('Press any key to exit')
+print('\r\nPress any key to exit')
 msvcrt.getch()
 
 DownloadDS.before_shutdown = 'end'

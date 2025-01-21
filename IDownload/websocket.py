@@ -3,6 +3,7 @@ import json
 import os.path
 import threading
 import time
+import ctypes, ctypes.wintypes
 
 
 try:
@@ -25,9 +26,16 @@ class DownloadsMonitorDS(WebSocketDataStore):
     self.downloads = {}
     self.report_datastore = report_datastore
 
-  @getattr(property(), 'setter')
+  @property
+  def progress(self):
+    return lambda sdid: None if (ind := self.downloads.get(sdid)) is None else self.outgoing[ind][1]
+
+  @progress.setter
   def progress(self, value):
-    self.set_outgoing(self.downloads.setdefault(tuple(d[k] for d in (json.loads(value),) for k in ('sid', 'did')), len(self.downloads)), value)
+    progression = json.loads(value)
+    if progression['progress']['status'] in ('completed', 'aborted'):
+      self.report_datastore.downloaders.pop(progression['sdid'], None)
+    self.set_outgoing(self.downloads.setdefault(progression['sdid'], len(self.downloads)), value)
 
   def add_incoming(self, value):
     self.report_datastore.command = value
@@ -35,9 +43,11 @@ class DownloadsMonitorDS(WebSocketDataStore):
 
 class DownloadsReportDS(WebSocketDataStore):
 
-  def __init__(self):
+  def __init__(self, server):
     super().__init__()
     self.incoming_text_only = True
+    self.server = server
+    self.downloaders = {}
     self.monitor_datastore = DownloadsMonitorDS(self)
 
   @getattr(property(), 'setter')
@@ -51,11 +61,22 @@ class DownloadsReportDS(WebSocketDataStore):
 class DownloadsWSRequestHandler(WebSocketRequestHandler):
 
   def connected_callback(self):
-    print(self.connection)
+    super().connected_callback()
+    if self.channel.path == 'report' and self.channel.datastore.downloaders.setdefault(self.headers['X-Request-Id'], self) != self:
+      self.closed = True
+      return
+    print('connected -', self.channel.path, ':', self.connection.getpeername())
 
   def closed_callback(self):
     super().closed_callback()
+    if self.channel.path == 'report' and self.channel.datastore.downloaders.pop(self.headers['X-Request-Id'], None) == self:
+      progression = json.loads(self.channel.datastore.monitor_datastore.progress(self.headers['X-Request-Id']))
+      progression['progress']['status'] = 'aborted'
+      for sec in progression['progress'].get('sections', ()):
+        sec['status'] = 'aborted'
+      self.channel.datastore.monitor_datastore.progress = json.dumps(progression, separators=(',', ':'))
     self.server.close_event.set()
+    print('disconnected -', self.channel.path, ':', self.connection.getpeername())
 
 
 sys.stdin = open('con', 'r')
@@ -65,17 +86,15 @@ try:
   DownloadsWSServer.start()
   sys.stderr.buffer.write(b'0')
   sys.stderr.buffer.flush()
-  sys.stderr = open('con', 'w')
 except:
   sys.stderr.buffer.write(b'1')
   sys.stderr.buffer.flush()
   exit(1)
+sys.stderr = open('con', 'w')
 DownloadsWSServer.close_event = threading.Event()
-DownloadsDSReport = DownloadsReportDS()
-DownloadsDSReport.server = DownloadsWSServer
-DownloadsDSMonitor = DownloadsDSReport.monitor_datastore
+DownloadsDSReport = DownloadsReportDS(DownloadsWSServer)
 DownloadsWSServer.open('/report', DownloadsDSReport)
-DownloadsWSServer.open('/monitor', DownloadsDSMonitor)
+DownloadsWSServer.open('/monitor', DownloadsDSReport.monitor_datastore)
 DownloadsWSServer.close_event.set()
 while True:
   DownloadsWSServer.close_event.wait()

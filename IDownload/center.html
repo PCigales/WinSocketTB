@@ -2,7 +2,7 @@
 <html lang="en-GB">
   <head>
     <meta charset="utf-8">
-    <title>IDownload</title>
+    <title>IDownload center</title>
     <link rel="icon" type="image/x-icon" href="icon_48.png">
     <style type="text/css">
       body {
@@ -125,9 +125,14 @@
           }
         }
         &>button {
+          width: 5em;
+          height: 1.7em;
           margin-top: 0.5em;
           margin-right: 1em;
-          width: 5em;
+          border: none;
+          background-color: rgb(30, 30, 35);
+          color: inherit;
+          cursor: pointer;
           &:not(.explorer) {
             display: none;
           }
@@ -149,6 +154,6 @@
         <button class="explorer">Explorer</button><button class="discard">Discard</button><button class="restart">Restart</button><button class="suspend">Suspend</button><button class="resume">Resume</button>
       </li>
     </ul>
-    <script src="manager.js"></script>
+    <script src="center.js"></script>
   </body>
 </html>

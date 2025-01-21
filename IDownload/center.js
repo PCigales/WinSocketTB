@@ -1,14 +1,14 @@
 "use strict";
-const sid = parseInt((new URLSearchParams(location.search)).get("sid"));
+const sid = (new URLSearchParams(location.search)).get("sid");
 const num_form = Intl.NumberFormat();
 const progresses = new Map();
 const updating = [new Set(), -1000];
-const creating = [new Set(), true];
+const creating = new Set();
 var port;
 var socket;
-function set_progress(did) {
-  const progress = progresses.get(did);
-  const download = document.getElementById(did);
+function set_progress(sdid) {
+  const progress = progresses.get(sdid);
+  const download = document.getElementById("download_" + sdid);
   download.className = progress.status.split(" ")[0];
   download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
   download.getElementsByClassName("status")[0].innerText = progress.status;
@@ -17,23 +17,22 @@ function set_progress(did) {
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
 }
 async function create() {
-  while (creating[0].size) {
-    const did = creating[0].values().next().value;
-    const dinf = (await browser.storage.session.get(did))[did];
+  while (creating.size) {
+    const sdid = creating.values().next().value;
+    const dinf = (await browser.storage.session.get(sdid))[sdid];
     const download = document.getElementById("download_pattern").cloneNode(true);
-    download.id = did;
+    download.id = "download_" + sdid;
     download.getElementsByClassName("url")[0].innerText = dinf.url;
     download.getElementsByClassName("file")[0].innerText = dinf.file;
     Array.prototype.forEach.call(download.getElementsByTagName("button"), function (b) {b.addEventListener("click", send_command);});
     document.getElementById("downloads").prepend(download);
-    set_progress(did);
-    creating[0].delete(did);
+    set_progress(sdid);
+    creating.delete(sdid);
   }
-  creating[1] = true;
 }
 function update() {
-  for (const did of updating[0]) {
-    set_progress(did);
+  for (const sdid of updating[0]) {
+    set_progress(sdid);
   }
   updating[0].clear();
   updating[1] = performance.now();
@@ -45,22 +44,20 @@ function new_socket() {
   socket.onerror = socket.onclose = new_socket;
   socket.onmessage = function(event) {
     const progression = JSON.parse(event.data);
-    if (progression.sid != sid) {return;}
-    const did = "download" + progression.did.toString();
-    const ex = progresses.has(did) && ! creating[0].has(did);
-    progresses.set(did, progression.progress);
+    const sdid = progression.sdid;
+    if (sdid.split("_")[0] != sid) {return;}
+    const ex = progresses.has(sdid) && ! creating.has(sdid);
+    progresses.set(sdid, progression.progress);
     if (ex) {
-      updating[0].add(did);
+      updating[0].add(sdid);
       if (updating[1] != null) {
         updating[1] = null;
         setTimeout(update, Math.max(0, updating[1] + 1000 - performance.now()));
       }
     } else {
-      creating[0].add(did);
-      if (creating[1]) {
-        creating[1] = false;
-        setTimeout(create, 1);
-      }
+      const em = creating.size;
+      creating.add(sdid);
+      if (em == 0) {setTimeout(create, 1);}
     }
   };
   window.onbeforeunload = function () {
@@ -72,6 +69,7 @@ function new_socket() {
 function send_command() {
   if (getComputedStyle(this).display == "none") {return;}
   const download = this.parentNode;
+  const sdid = download.id.substring(9);
   switch (this.className) {
     case "explorer":
       browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[0].innerText + (download.className != "completed" ? ".idownload" : "")}).finally(Boolean);
@@ -79,21 +77,21 @@ function send_command() {
     case "discard":
     case "suspend":
       if (download.className != "working") {return;}
-      socket.send(`${this.className} ${this.parentNode.id.substring(8)}`);
+      socket.send(`${this.className} ${sdid}`);
       break;
     case "restart":
       if (download.className != "aborted") {return;}
-      delete progresses.get(this.parentNode.id).sections;
+      delete progresses.get(sdid).sections;
     case "resume":
       if (download.className != "aborted") {return;}
       download.className = "";
-      browser.runtime.sendMessage({"did": download.id, "progress": progresses.get(this.parentNode.id)}).then(function (response) {if (! response) {download.className = "aborted";}}, function () {download.className = "aborted";});
+      browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)}).then(function (response) {if (! response) {download.className = "aborted";}}, function () {download.className = "aborted";});
       break;
   }
 }
-browser.tabs.query({url: browser.runtime.getURL(location.href)}).then(
-  function (tabs) {
-    if (tabs.length > 1) {
+Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), browser.storage.session.get("sid")]).then(
+  function ([tabs, results]) {
+    if (tabs.length > 1 || results.sid?.toString() != sid) {
       browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});
     } else {
       browser.storage.local.get({port: 9009}).then(
