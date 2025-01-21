@@ -1961,11 +1961,9 @@ class HTTPExplodedMessage:
     hck = self.header('Set-Cookie')
     domain = domain.lower()
     dom_ip = all(c in '.:[]0123456789' for c in domain)
-    path = path.rstrip('/') if (path != '/' and path[:1] == '/') else '/'
     ck = {}
     if hck is not None:
-      hck = map(str.strip, hck.split('\n'))
-      for co in hck:
+      for co in map(str.strip, hck.split('\n')):
         c = map(str.strip, co.split(';'))
         try:
           cn, cv = next(c).split('=', 1)
@@ -1977,19 +1975,18 @@ class HTTPExplodedMessage:
               can, cav = ca.split('=', 1)
             except:
               continue
-            if cd is None and can.lower() == 'domain' and cav:
-              cav = cav.lstrip('.').lower()
-              if (domain != cav) if dom_ip else (domain[-len(cav) - 1 :] not in (cav, '.' + cav)):
-                raise
-              cd = (cav, True)
-            if cp is None and can.lower() == 'path':
-              if path[: len(cav) + (1 if cav[-1:] != '/' else 0)] not in (cav, cav + '/'):
-                raise
+            if can.lower() == 'domain' and cav:
+              cd = (cav.lstrip('.').lower(), True)
+            if can.lower() == 'path' and cav[:1] == '/':
               cp = cav
           if cd is None:
             cd = (domain, False)
+          else:
+            cav = cd[0]
+            if (domain != cav) if dom_ip else (domain[-len(cav) - 1 :] not in (cav, '.' + cav)):
+              raise
           if cp is None:
-            cp = ''
+            cp = path.rstrip('/') if (path != '/' and path[:1] == '/') else '/'
           ck[(cd, cp, cn)] = cv
         except:
           pass
@@ -4517,6 +4514,7 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
       with self.server.lock:
         del self.channel.handlers[self]
       return
+    self.headers = req.headers
     WebSocketHandler.handle(self)
     with self.server.lock:
       del self.channel.handlers[self]
@@ -4649,7 +4647,7 @@ class WebSocketIDAltServer(MixinIDAltServer, WebSocketIDServer):
 
 class WebSocketIDClient(WebSocketHandler):
 
-  def __new__(cls, channel_address, datastore=None, own_address='', connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None, idsocket_generator=None):
+  def __new__(cls, channel_address, datastore=None, headers=None, own_address='', connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None, idsocket_generator=None):
     self = object.__new__(cls)
     self.channel_address = channel_address
     ca_p = urllib.parse.urlsplit(channel_address, allow_fragments=False)
@@ -4663,13 +4661,13 @@ class WebSocketIDClient(WebSocketHandler):
     ws_acc = base64.b64encode(sha1).decode('utf-8')
     if proxy is not None:
       proxy['tunnel'] = True
-    rep = HTTPRequestConstructor(self.idsocketgen, proxy)(channel_address, headers={'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
+    rep = HTTPRequestConstructor(self.idsocketgen, proxy)(channel_address, headers={**({} if headers is None else {k: v for k, v in headers.items() if k.lower() not in ('upgrade', 'connection', 'sec-websocket-version', 'sec-websocket-key')}), 'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
     if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close or not self.pconnection[0]:
       return None
     self.pconnection[0].settimeout(None)
     return self
 
-  def __init__(self, channel_address, datastore=None, own_address='', connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None, idsocket_generator=None):
+  def __init__(self, channel_address, datastore=None, headers=None, own_address='', connection_timeout=3, daemon_thread=False, inactive_maxtime=180, proxy=None, idsocket_generator=None):
     self.idsocket = self.pconnection[0]
     WebSocketHandler.__init__(self, self.idsocket, 'client')
     self.datastore = datastore
