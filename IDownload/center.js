@@ -41,7 +41,6 @@ async function create() {
   }
 }
 async function update() {
-  console.log("u");
   for (const sdid of updating[0].values()) {
     updating[0].delete(sdid);
     await set_progress(sdid);
