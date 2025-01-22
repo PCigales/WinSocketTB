@@ -2,13 +2,18 @@
 const sid = (new URLSearchParams(location.search)).get("sid");
 const num_form = Intl.NumberFormat();
 const progresses = new Map();
-const updating = [new Set(), -1000];
+const updating = [new Set(), -500];
 const creating = new Set();
 var port;
 var socket;
-function set_progress(sdid) {
+var histper;
+async function set_progress(sdid) {
+  console.log(sdid);
   const progress = progresses.get(sdid);
   const download = document.getElementById("download_" + sdid);
+  if (histper > 0 && progress.status == "aborted" && progress.sections) {
+    await browser.storage.local.set({["p_" + sdid]: progress});
+  }
   download.className = progress.status.split(" ")[0];
   download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
   download.getElementsByClassName("status")[0].innerText = progress.status;
@@ -19,23 +24,29 @@ function set_progress(sdid) {
 async function create() {
   while (creating.size) {
     const sdid = creating.values().next().value;
-    const dinf = (await browser.storage.session.get(sdid))[sdid];
-    const download = document.getElementById("download_pattern").cloneNode(true);
-    download.id = "download_" + sdid;
-    download.getElementsByClassName("url")[0].innerText = dinf.url;
-    download.getElementsByClassName("file")[0].innerText = dinf.file;
-    Array.prototype.forEach.call(download.getElementsByTagName("button"), function (b) {b.addEventListener("click", send_command);});
-    document.getElementById("downloads").prepend(download);
-    set_progress(sdid);
+    const results = await browser.storage.session.get(sdid);
+    if (results.hasOwnProperty(sdid)) {
+      const dinf = results[sdid];
+      const download = document.getElementById("download_pattern").cloneNode(true);
+      download.id = "download_" + sdid;
+      download.getElementsByClassName("url")[0].innerText = dinf.url;
+      download.getElementsByClassName("file")[0].innerText = dinf.file;
+      Array.prototype.forEach.call(download.getElementsByTagName("button"), function (b) {b.addEventListener("click", send_command);});
+      document.getElementById("downloads").prepend(download);
+      await set_progress(sdid);
+    } else {
+      progresses.set(sdid, null);
+    }
     creating.delete(sdid);
   }
 }
-function update() {
-  for (const sdid of updating[0]) {
-    set_progress(sdid);
+async function update() {
+  console.log("u");
+  for (const sdid of updating[0].values()) {
+    updating[0].delete(sdid);
+    await set_progress(sdid);
   }
-  updating[0].clear();
-  updating[1] = performance.now();
+  if (updating[0].size) {setTimeout(update, 500);} else {updating[1] = performance.now();}
 }
 function new_socket() {
   if (socket) {socket.onerror = socket.onclose = null; document.getElementById("connected").classList.add("not");}
@@ -45,19 +56,20 @@ function new_socket() {
   socket.onmessage = function(event) {
     const progression = JSON.parse(event.data);
     const sdid = progression.sdid;
-    if (sdid.split("_")[0] != sid) {return;}
-    const ex = progresses.has(sdid) && ! creating.has(sdid);
-    progresses.set(sdid, progression.progress);
-    if (ex) {
-      updating[0].add(sdid);
-      if (updating[1] != null) {
-        updating[1] = null;
-        setTimeout(update, Math.max(0, updating[1] + 1000 - performance.now()));
+    if (progresses.has(sdid)) {
+      if (progresses.get(sdid) === null) {return;}
+      progresses.set(sdid, progression.progress);
+      if (! creating.has(sdid)) {
+        updating[0].add(sdid);
+        if (updating[1] != null) {
+          setTimeout(update, Math.max(0, updating[1] + 500 - performance.now()));
+          updating[1] = null;
+        }
       }
     } else {
-      const em = creating.size;
+      progresses.set(sdid, progression.progress);
       creating.add(sdid);
-      if (em == 0) {setTimeout(create, 1);}
+      if (creating.size == 1) {setTimeout(create, 1);}
     }
   };
   window.onbeforeunload = function () {
@@ -85,7 +97,10 @@ function send_command() {
     case "resume":
       if (download.className != "aborted") {return;}
       download.className = "";
-      browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)}).then(function (response) {if (! response) {download.className = "aborted";}}, function () {download.className = "aborted";});
+      (histper > 0 ? browser.storage.local.remove("p_" + sdid) : Promise.resolve()).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(
+        function (response) {if (! response) {(histper > 0 ? browser.storage.local.set({["p_" + sdid]: progresses.get(sdid)}) : Promise.resolve()).then(function () {download.className = "aborted";});}},
+        function () {(histper > 0 ? browser.storage.local.set({["p_" + sdid]: progresses.get(sdid)}) : Promise.resolve()).then(function () {download.className = "aborted";});}
+      );
       break;
   }
 }
@@ -94,9 +109,25 @@ Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), b
     if (tabs.length > 1 || results.sid?.toString() != sid) {
       browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});
     } else {
-      browser.storage.local.get({port: 9009}).then(
-        function (results) {port = results.port;},
-        function () {port = 9009;}
+      browser.storage.local.get({port: 9009, histper: 7}).then(
+        function (results) {
+          port = results.port;
+          histper = results.histper;
+        },
+        function () {
+          port = 9009;
+          histper = 7;
+        }
+      ).then(() => browser.storage.local.get()).then(
+        function (results) {
+          for (const d of Object.entries(results).filter((r) => r[0].startsWith("p_")).map((r) => [r[0].substring(2).split('_'), r[1]]).sort((d1, d2) => (d1[0][0] - d2[0][0]) || (d1[0][1] - d2[0][1]))) {
+            const sdid = d[0].join("_");
+            progresses.set(sdid, d[1]);
+            creating.add(sdid);
+          }
+          return create();
+        },
+        function () {return create();}
       ).then(new_socket);
     }
   }
