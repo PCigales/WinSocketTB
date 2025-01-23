@@ -3,6 +3,7 @@ import json
 import os.path
 import threading
 import time
+import ctypes, ctypes.wintypes
 
 
 try:
@@ -15,6 +16,19 @@ except:
     from SocketTB import WebSocketDataStore, WebSocketRequestHandler, WebSocketIDAltServer
   except:
     exit(1)
+
+# kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+# kernel32.GetConsoleWindow.restype = ctypes.wintypes.HWND
+# user32 = ctypes.WinDLL('user32', use_last_error=True)
+# user32.GetSystemMenu.restype = ctypes.wintypes.HMENU
+# user32.GetSystemMenu.argtypes = (ctypes.wintypes.HWND, ctypes.wintypes.BOOL)
+# user32.DeleteMenu.restype = ctypes.wintypes.BOOL
+# user32.DeleteMenu.argtypes = (ctypes.wintypes.HMENU, ctypes.wintypes.UINT, ctypes.wintypes.UINT)
+# user32.DeleteMenu(user32.GetSystemMenu(kernel32.GetConsoleWindow(), False), 0xf060, 0)
+# handler_routine = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.wintypes.DWORD)(lambda dwCtrlType: True)
+# kernel32.SetConsoleCtrlHandler.restype = ctypes.wintypes.BOOL
+# kernel32.SetConsoleCtrlHandler.argtypes = (ctypes.wintypes.LPVOID, ctypes.wintypes.BOOL)
+# kernel32.SetConsoleCtrlHandler(handler_routine, True)
 
 
 class DownloadsMonitorDS(WebSocketDataStore):
@@ -64,7 +78,7 @@ class DownloadsWSRequestHandler(WebSocketRequestHandler):
     if self.channel.path == 'report' and self.channel.datastore.downloaders.setdefault(self.headers['X-Request-Id'], self) != self:
       self.closed = True
       return
-    print('connected -', self.channel.path, ':', self.connection.getpeername())
+    # print('connected -', self.channel.path, ':', self.connection.getpeername())
 
   def closed_callback(self):
     super().closed_callback()
@@ -75,11 +89,11 @@ class DownloadsWSRequestHandler(WebSocketRequestHandler):
         sec['status'] = 'aborted'
       self.channel.datastore.monitor_datastore.progress = json.dumps(progression, separators=(',', ':'))
     self.server.close_event.set()
-    print('disconnected -', self.channel.path, ':', self.connection.getpeername())
+    # print('disconnected -', self.channel.path, ':', self.connection.getpeername())
 
 
-sys.stdin = open('con', 'r')
-sys.stdout = open('con', 'w')
+# sys.stdin = open('con', 'r')
+# sys.stdout = open('con', 'w')
 try:
   DownloadsWSServer = WebSocketIDAltServer(('localhost', int(sys.argv[1])), DownloadsWSRequestHandler)
   DownloadsWSServer.start()

@@ -17,7 +17,7 @@ async function set_progress(sdid) {
   download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
   download.getElementsByClassName("status")[0].innerText = progress.status;
   download.getElementsByClassName("downloaded")[0].innerText = num_form.format(progress.downloaded);
-  download.getElementsByClassName("bar")[0].innerHTML = progress.sections ? progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : ((progress.status != "aborted" && progress.size) ? `<progress max="${progress.size}" value="${progress.downloaded}" style="flex: 1 1 1px"></progress>` : "");
+  download.getElementsByClassName("bar")[0].innerHTML = progress.sections ? progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="${progress.size}" value="${progress.downloaded}" style="flex: 1 1 1px"></progress>` : "");
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
 }
 async function create() {
@@ -85,15 +85,16 @@ function send_command() {
       browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[0].innerText + (download.className != "completed" ? ".idownload" : "")}).finally(Boolean);
       break;
     case "discard":
+      if (! window.confirm("Discard the download ?")) {break;}
     case "suspend":
-      if (download.className != "working") {return;}
+      if (download.className != "working") {break;}
       socket.send(`${this.className} ${sdid}`);
       break;
     case "restart":
-      if (download.className != "aborted") {return;}
+      if (download.className != "aborted" || (progresses.get(sdid).hasOwnProperty("sections") && ! window.confirm("Restart the download ?"))) {break;}
       delete progresses.get(sdid).sections;
     case "resume":
-      if (download.className != "aborted") {return;}
+      if (download.className != "aborted") {break;}
       download.className = "";
       browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(progresses.get(sdid).hasOwnProperty("sections") ? results : {}).then(function () {download.className = "aborted";})));
       break;
