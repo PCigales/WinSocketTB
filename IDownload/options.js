@@ -7,17 +7,17 @@ function show_msg() {
 }
 function save(event) {
   event?.preventDefault();
-  browser.storage.local.set(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, i.valueAsNumber]))).then(show_msg.bind("saved"), show_msg.bind("not saved"));
+  browser.storage.local.set(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, (i.type.toLowerCase() == "checkbox" ? i.checked : i.valueAsNumber)]))).then(show_msg.bind("saved"), show_msg.bind("not saved"));
 }
 function restore(event) {
   event?.preventDefault();
-  browser.storage.local.get(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, parseInt(i.defaultValue)]))).then(
+  browser.storage.local.get(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, (i.type.toLowerCase() == "checkbox" ? i.defaultChecked : parseInt(i.defaultValue))]))).then(
     function (results) {
-      Array.prototype.forEach.call(document.getElementById("form").getElementsByTagName("input"), function (i) {i.value = results[i.id];});
+      Array.prototype.forEach.call(document.getElementById("form").getElementsByTagName("input"), function (i) {i[i.type.toLowerCase() == "checkbox" ? "checked": "value"] = results[i.id];});
       if (event) {show_msg.call("restored");}
     },
     function () {
-      Array.prototype.forEach.call(document.getElementById("form").getElementsByTagName("input"), function (i) {i.value = parseInt(i.defaultValue);});
+      Array.prototype.forEach.call(document.getElementById("form").getElementsByTagName("input"), function (i) {i[i.type.toLowerCase() == "checkbox" ? "checked" : "value"] = i.type.toLowerCase() == "checkbox" ? i.defaultChecked : parseInt(i.defaultValue);});
       if (event) {show_msg.call("restored");}
     }
   );

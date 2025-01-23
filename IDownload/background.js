@@ -13,10 +13,10 @@ browser.downloads.onCreated.addListener(
     const inf = rid_inf.get(rid);
     const did = item.id;
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
-    Promise.all([get_sid(), get_histper()]).then(
-      function ([sid, histper]) {
+    Promise.all([get_sid(), get_histopts()]).then(
+      function ([sid, histopts]) {
         const sdid = `${sid}_${did}`;
-        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), (histper > 0 ? browser.storage.local.set({["i_" + sdid]: dinf}) : Promise.resolve())]).then(
+        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : Promise.resolve())]).then(
           function ([results]) {
             browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf}).then(
               function (response) {if (response) {browser.downloads.cancel(did).catch(Boolean);}},
@@ -30,7 +30,7 @@ browser.downloads.onCreated.addListener(
 );
 browser.action.onClicked.addListener(
   function (tab, click) {
-    Promise.all([get_sid(), get_histper()]).then(
+    Promise.all([get_sid(), get_histopts()]).then(
       function ([sid]) {
         browser.tabs.query({url: browser.runtime.getURL(`center.html?sid=${sid}`)}).then(
           function (tabs) {
@@ -84,34 +84,34 @@ function get_sid() {
   }
   return get_sid.sid;
 }
-function get_histper() {
-  if (get_histper.histper === undefined) {
-    get_histper.histper = Promise.all([get_sid(), browser.storage.session.get("histper")]).then(
+function get_histopts() {
+  if (get_histopts.histopts === undefined) {
+    get_histopts.histopts = Promise.all([get_sid(), browser.storage.session.get("histopts")]).then(
       function ([sid, results]) {
-        if (results.hasOwnProperty("histper")) {
-          return results.histper;
+        if (results.hasOwnProperty("histopts")) {
+          return results.histopts;
         } else {
           return browser.storage.local.get().then(
             function (results) {
-              const histper = results.hasOwnProperty("histper") ? results.histper : 7;
-              const a = {histper};
+              const histopts = [(results.hasOwnProperty("histper") ? results.histper : 7) , (results.hasOwnProperty("histinco") ? results.histinco : false)];
+              const a = {histopts};
               const d = [];
               for (const r of Object.entries(results)) {
-                if (r[0][1] == "_") {
-                  const sdid = r[0].substring(2);
-                  if (sid - parseInt(sdid.split('_')) >= histper * 86400000) {
+                if (r[0][2] == "_") {
+                  const sdid = r[0].substring(3);
+                  if ((! histopts[1] && r[0][1] == "0") || (sid - parseInt(sdid.split('_')) >= histopts[0] * 86400000)) {
                     d.push(r[0]);
                   } else if (r[0][0] == "i") {
                     a[sdid] = r[1];
                   }
                 }
               }
-              return Promise.all([browser.storage.local.remove(d), browser.storage.session.set(a)]).then(() => histper);
+              return Promise.all([browser.storage.local.remove(d), browser.storage.session.set(a)]).then(() => histopts);
             }
           );
         }
       }
     );
   }
-  return get_histper.histper;
+  return get_histopts.histopts;
 }

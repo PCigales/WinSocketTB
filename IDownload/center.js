@@ -6,13 +6,12 @@ const updating = [new Set(), -500];
 const creating = new Set();
 var port;
 var socket;
-var histper;
 async function set_progress(sdid) {
-  console.log(sdid);
   const progress = progresses.get(sdid);
   const download = document.getElementById("download_" + sdid);
-  if (histper > 0 && progress.status == "aborted" && progress.sections) {
-    await browser.storage.local.set({["p_" + sdid]: progress});
+  if (progress.status == "aborted" && progress.sections) {
+    const results = Object.keys(await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]));
+    if (results.length > 0) {await browser.storage.local.set({["p" + results[0].substring(1)]: progress});}
   }
   download.className = progress.status.split(" ")[0];
   download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
@@ -96,10 +95,7 @@ function send_command() {
     case "resume":
       if (download.className != "aborted") {return;}
       download.className = "";
-      (histper > 0 ? browser.storage.local.remove("p_" + sdid) : Promise.resolve()).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(
-        function (response) {if (! response) {(histper > 0 ? browser.storage.local.set({["p_" + sdid]: progresses.get(sdid)}) : Promise.resolve()).then(function () {download.className = "aborted";});}},
-        function () {(histper > 0 ? browser.storage.local.set({["p_" + sdid]: progresses.get(sdid)}) : Promise.resolve()).then(function () {download.className = "aborted";});}
-      );
+      browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(progresses.get(sdid).hasOwnProperty("sections") ? results : {}).then(function () {download.className = "aborted";})));
       break;
   }
 }
@@ -108,18 +104,12 @@ Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), b
     if (tabs.length > 1 || results.sid?.toString() != sid) {
       browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});
     } else {
-      browser.storage.local.get({port: 9009, histper: 7}).then(
-        function (results) {
-          port = results.port;
-          histper = results.histper;
-        },
-        function () {
-          port = 9009;
-          histper = 7;
-        }
+      browser.storage.local.get({port: 9009}).then(
+        function (results) {port = results.port;},
+        function () {port = 9009;}
       ).then(() => browser.storage.local.get()).then(
         function (results) {
-          for (const d of Object.entries(results).filter((r) => r[0].startsWith("p_")).map((r) => [r[0].substring(2).split('_'), r[1]]).sort((d1, d2) => (d1[0][0] - d2[0][0]) || (d1[0][1] - d2[0][1]))) {
+          for (const d of Object.entries(results).filter((r) => r[0][0] == "p" && r[0][2] == "_").map((r) => [r[0].substring(3).split('_'), r[1]]).sort((d1, d2) => (d1[0][0] - d2[0][0]) || (d1[0][1] - d2[0][1]))) {
             const sdid = d[0].join("_");
             progresses.set(sdid, d[1]);
             creating.add(sdid);
