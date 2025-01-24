@@ -9,16 +9,15 @@ var socket;
 async function set_progress(sdid) {
   const progress = progresses.get(sdid);
   const download = document.getElementById("download_" + sdid);
-  if (progress.status == "aborted" && progress.sections) {
-    const results = Object.keys(await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]));
-    if (results.length > 0) {await browser.storage.local.set({["p" + results[0].substring(1)]: progress});}
-  }
   download.className = progress.status.split(" ")[0];
   download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
   download.getElementsByClassName("status")[0].innerText = progress.status;
   download.getElementsByClassName("downloaded")[0].innerText = num_form.format(progress.downloaded);
   download.getElementsByClassName("bar")[0].innerHTML = progress.sections ? progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="${progress.size}" value="${progress.downloaded}" style="flex: 1 1 1px"></progress>` : "");
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
+  if (progress.status == "aborted" && progress.sections) {
+    await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]).then((results) => browser.storage.local.set(Object.fromEntries(Object.keys(results).map((r) => ["p" + r.substring(1), progress]))));
+  }
 }
 async function create() {
   while (creating.size) {
@@ -32,11 +31,12 @@ async function create() {
       download.getElementsByClassName("file")[0].innerText = dinf.file;
       Array.prototype.forEach.call(download.getElementsByTagName("button"), function (b) {b.addEventListener("click", send_command);});
       document.getElementById("downloads").prepend(download);
+      creating.delete(sdid);
       await set_progress(sdid);
     } else {
       progresses.set(sdid, null);
+      creating.delete(sdid);
     }
-    creating.delete(sdid);
   }
 }
 async function update() {
@@ -103,7 +103,7 @@ function send_command() {
 Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), browser.storage.session.get("sid")]).then(
   function ([tabs, results]) {
     if (tabs.length > 1 || results.sid?.toString() != sid) {
-      browser.tabs.getCurrent().then(function (tab) {browser.tabs.remove(tab.id);});
+      browser.tabs.getCurrent().then((tab) => browser.tabs.remove(tab.id));
     } else {
       browser.storage.local.get({port: 9009}).then(
         function (results) {port = results.port;},
@@ -117,7 +117,7 @@ Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), b
           }
           return create();
         },
-        function () {return create();}
+        Boolean
       ).then(new_socket);
     }
   }

@@ -16,14 +16,7 @@ browser.downloads.onCreated.addListener(
     Promise.all([get_sid(), get_histopts()]).then(
       function ([sid, histopts]) {
         const sdid = `${sid}_${did}`;
-        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : Promise.resolve())]).then(
-          function ([results]) {
-            browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf}).then(
-              function (response) {if (response) {browser.downloads.cancel(did).catch(Boolean);}},
-              function () {}
-            );
-          }
-        );
+        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
       }
     );
   }
@@ -32,11 +25,7 @@ browser.action.onClicked.addListener(
   function (tab, click) {
     Promise.all([get_sid(), get_histopts()]).then(
       function ([sid]) {
-        browser.tabs.query({url: browser.runtime.getURL(`center.html?sid=${sid}`)}).then(
-          function (tabs) {
-            (tabs.length ? browser.windows.update(tabs[0].windowId, {focused: true}) : Promise.reject()).catch(function () {browser.windows.create({type: "popup", url: `center.html?sid=${sid}`});});
-          }
-        );
+        browser.tabs.query({url: browser.runtime.getURL(`center.html?sid=${sid}`)}).then((tabs) => tabs.length ? browser.windows.update(tabs[0].windowId, {focused: true}) : Promise.reject()).catch(() => browser.windows.create({type: "popup", url: `center.html?sid=${sid}`}));
       }
     );
   }
@@ -45,25 +34,12 @@ browser.runtime.onMessage.addListener(
   function (message, sender, respond) {
     get_sid().then(
       function (sid) {
-        if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {return;}
-        if (message.hasOwnProperty("explorer")) {
-          browser.runtime.sendNativeMessage("idownload", message).then(
-            function (response) {respond(response);},
-            function () {respond(false);}
-          );
-          return
-        }
+        if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {throw null;}
+        if (message.hasOwnProperty("explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
         const sdid = message.sdid;
-        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.get(sdid)]).then(
-          function ([results1, results2]) {
-            browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}).then(
-              function (response) {respond(response);},
-              function () {respond(false);}
-            );
-          }
-        );
+        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}));
       }
-    );
+    ).catch(() => false).then(respond);
     return true;
   }
 );

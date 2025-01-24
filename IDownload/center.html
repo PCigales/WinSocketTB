@@ -71,7 +71,7 @@
           &>button.restart {
             display: revert;
           }
-          &:has(>div.progression>span.bar:not(:empty))>button.resume {
+          &:has(>div.progression>span.bar>progress:not(.no))>button.resume {
             display: revert;
           }
         }
@@ -141,7 +141,7 @@
     </style>
   </head>
   <body>
-    <h1>IDownload</h1>
+    <h1>IDownload center</h1>
     <div id="connected" class="not">&udarr;</div>
     <ul id="downloads">
       <li id="download_pattern">
