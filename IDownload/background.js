@@ -1,6 +1,5 @@
 browser.webRequest.onSendHeaders.addListener(
   function (details) {
-    console.log(details);
     url_rid.set(details.url, details.requestId);
     rid_inf.set(details.requestId, [details.url, details.requestHeaders]);
   },
