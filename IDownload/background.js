@@ -1,9 +1,10 @@
 browser.webRequest.onSendHeaders.addListener(
   function (details) {
+    console.log(details);
     url_rid.set(details.url, details.requestId);
     rid_inf.set(details.requestId, [details.url, details.requestHeaders]);
   },
-  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "other"]},
+  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"]},
   ["requestHeaders"]
 );
 browser.downloads.onCreated.addListener(
