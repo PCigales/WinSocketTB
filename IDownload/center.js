@@ -10,9 +10,9 @@ async function set_progress(sdid) {
   const progress = progresses.get(sdid);
   const download = document.getElementById("download_" + sdid);
   download.className = progress.status.split(" ")[0];
-  download.getElementsByClassName("size")[0].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
-  download.getElementsByClassName("status")[0].innerText = progress.status;
-  download.getElementsByClassName("downloaded")[0].innerText = num_form.format(progress.downloaded);
+  download.getElementsByClassName("size")[1].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
+  download.getElementsByClassName("status")[1].innerText = progress.status;
+  download.getElementsByClassName("downloaded")[1].innerText = num_form.format(progress.downloaded);
   download.getElementsByClassName("bar")[0].innerHTML = progress.sections ? progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="${progress.size}" value="${progress.downloaded}" style="flex: 1 1 1px"></progress>` : "");
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
   if (progress.status == "aborted" && progress.sections) {
@@ -23,12 +23,12 @@ async function create() {
   while (creating.size) {
     const sdid = creating.values().next().value;
     const results = await browser.storage.session.get(sdid);
-    if (results.hasOwnProperty(sdid)) {
+    if (Object.hasOwn(results, sdid)) {
       const dinf = results[sdid];
       const download = document.getElementById("download_pattern").cloneNode(true);
       download.id = "download_" + sdid;
-      download.getElementsByClassName("url")[0].innerText = dinf.url;
-      download.getElementsByClassName("file")[0].innerText = dinf.file;
+      download.getElementsByClassName("url")[1].innerText = dinf.url;
+      download.getElementsByClassName("file")[1].innerText = dinf.file;
       Array.prototype.forEach.call(download.getElementsByTagName("button"), function (b) {b.addEventListener("click", send_command);});
       document.getElementById("downloads").prepend(download);
       creating.delete(sdid);
@@ -82,7 +82,7 @@ function send_command() {
   const sdid = download.id.substring(9);
   switch (this.className) {
     case "explorer":
-      browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[0].innerText + (download.className != "completed" ? ".idownload" : "")}).finally(Boolean);
+      browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[1].innerText + (download.className != "completed" ? ".idownload" : "")}).finally(Boolean);
       break;
     case "discard":
       if (! window.confirm("Discard the download ?")) {break;}
@@ -91,12 +91,12 @@ function send_command() {
       socket.send(`${this.className} ${sdid}`);
       break;
     case "restart":
-      if (download.className != "aborted" || (progresses.get(sdid).hasOwnProperty("sections") && ! window.confirm("Restart the download ?"))) {break;}
+      if (download.className != "aborted" || (Object.hasOwn(progresses.get(sdid), "sections") && ! window.confirm("Restart the download ?"))) {break;}
       delete progresses.get(sdid).sections;
     case "resume":
       if (download.className != "aborted") {break;}
       download.className = "";
-      browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(progresses.get(sdid).hasOwnProperty("sections") ? results : {}).then(function () {download.className = "aborted";})));
+      browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(Object.hasOwn(progresses.get(sdid), "sections") ? results : {}).then(function () {download.className = "aborted";})));
       break;
   }
 }

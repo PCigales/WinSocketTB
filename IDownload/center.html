@@ -76,20 +76,29 @@
           }
         }
         &>div {
+          position: relative;
           margin-right: 1em;
-          text-indent: hanging 6em;
+          white-space: pre;
+          word-break: keep-all;
           &::before {
             content: attr(class)": ";
             display: inline-block;
             width: 6em;
             text-transform: capitalize;
           }
-          &:is(.size, .downloaded) {
-            &:not(:empty)::after {
-              content: " o";
-            }
-            &:empty::after {
-              content: "?";
+          &not(.progression)>span {
+            position: absolute;
+            display: inline-block;
+            max-width: calc(100% - 6em);
+            overflow: auto;
+            scrollbar-width: none;
+            &:is(.size, .downloaded) {
+              &:not(:empty)::after {
+                content: " o";
+              }
+              &:empty::after {
+                content: "?";
+              }
             }
           }
           &.progression {
@@ -145,11 +154,11 @@
     <div id="connected" class="not">&udarr;</div>
     <ul id="downloads">
       <li id="download_pattern">
-        <div class="url"></div>
-        <div class="file"></div>
-        <div class="size"></div>
-        <div class="status"></div>
-        <div class="downloaded"></div>
+        <div class="url"><span class="url"></span></div>
+        <div class="file"><span class="file"></span></div>
+        <div class="size"><span class="size"></span></div>
+        <div class="status"><span class="status"></span></div>
+        <div class="downloaded"><span class="downloaded"></span></div>
         <div class="progression"><span class="bar"></span><span class="percent"></span></div>
         <button class="explorer">Explorer</button><button class="discard">Discard</button><button class="restart">Restart</button><button class="suspend">Suspend</button><button class="resume">Resume</button>
       </li>

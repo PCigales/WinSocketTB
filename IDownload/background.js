@@ -8,9 +8,7 @@ browser.webRequest.onSendHeaders.addListener(
 );
 browser.downloads.onCreated.addListener(
   function (item) {
-    const rid = url_rid.get(item.url);
-    if (! rid) {return;}
-    const inf = rid_inf.get(rid);
+    const inf = url_rid.has(item.url) ? rid_inf.get(url_rid.get(item.url)) : [item.url, []];
     const did = item.id;
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
     Promise.all([get_sid(), get_histopts()]).then(
@@ -35,9 +33,9 @@ browser.runtime.onMessage.addListener(
     get_sid().then(
       function (sid) {
         if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {throw null;}
-        if (message.hasOwnProperty("explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
+        if (Object.hasOwn(message, "explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
         const sdid = message.sdid;
-        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (message.progress.hasOwnProperty("sections") ? message.progress : null)}));
+        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (Object.hasOwn(message.progress, "sections") ? message.progress : null)}));
       }
     ).catch(() => false).then(respond);
     return true;
@@ -49,7 +47,7 @@ function get_sid() {
   if (get_sid.sid === undefined) {
     get_sid.sid = browser.storage.session.get("sid").then(
       function (results) {
-        if (results.hasOwnProperty("sid")) {
+        if (Object.hasOwn(results, "sid")) {
           return results.sid;
         } else {
           const sid = Date.now();
@@ -64,12 +62,12 @@ function get_histopts() {
   if (get_histopts.histopts === undefined) {
     get_histopts.histopts = Promise.all([get_sid(), browser.storage.session.get("histopts")]).then(
       function ([sid, results]) {
-        if (results.hasOwnProperty("histopts")) {
+        if (Object.hasOwn(results, "histopts")) {
           return results.histopts;
         } else {
           return browser.storage.local.get().then(
             function (results) {
-              const histopts = [(results.hasOwnProperty("histper") ? results.histper : 7) , (results.hasOwnProperty("histinco") ? results.histinco : false)];
+              const histopts = [(Object.hasOwn(results, "histper") ? results.histper : 7) , (Object.hasOwn(results, "histinco") ? results.histinco : false)];
               const a = {histopts};
               const d = [];
               for (const r of Object.entries(results)) {
