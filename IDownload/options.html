@@ -12,40 +12,40 @@
         grid-auto-rows: max-content;
         gap: 1em;
         align-items: unsafe center;
+        padding-left: 1em;
+        padding-right: 1em;
         &>label {
           justify-self: unsafe start;
-          margin-left: 1em;
         }
         &>input {
           justify-self: unsafe end;
-          width: calc(3em + 14px);
-          margin-right: 1em;
-          text-align: right;
-        }
-        &>button {
-          box-sizing: content-box;
-          width: 3.2em;
-          margin-top: 1.5em;
-          margin-bottom: 0.5em;
-          &:first-of-type {
-            justify-self: unsafe start;
-            margin-left: 2em;
-          }
-          &:last-of-type {
-            justify-self: unsafe end;
-            margin-right: 2em;
+          &[type=number] {
+            width: calc(3em + 14px);
+            text-align: right;
           }
         }
-      }
-      #message {
-        position: absolute;
-        bottom: 0.2em;
-        left: 0;
-        right: 0;
-        white-space: nowrap;
-        text-align: center;
-        &>span:not(:first-of-type) {
-          display: none;
+        &>div {
+          grid-column: 1 / 3;
+          justify-self: stretch;
+          padding: 1em;
+          text-align: center;
+          &>button {
+            box-sizing: content-box;
+            width: 3.2em;
+            &:first-of-type {
+              float: left;
+            }
+            &:last-of-type {
+              float: right;
+            }
+          }
+          &>#message {
+            vertical-align: sub;
+            white-space: nowrap;
+            &>span:not(:first-of-type) {
+              display: none;
+            }
+          }
         }
       }
     </style>
@@ -58,9 +58,8 @@
       <label for="secmin">Minimum section size in MB:</label><input type="number" id="secmin" min="1" max="256" step="1" value="1">
       <label for="histper">Downloads history retention period in days:</label><input type="number" id="histper" min="0" max="90" step="1" value="7">
       <label for="histinco">Recording in the history of private browsing downloads:</label><input type="checkbox" id="histinco">
-      <button type="submit" id="save">Save</button><button type="reset" id="restore">Restore</button>
+      <div><button type="submit" id="save">Save</button><span id="message"></span><button type="reset" id="restore">Restore</button></div>
     </form>
-    <div id="message"></div>
     <script src="options.js"></script>
   </body>
 </html>

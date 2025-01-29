@@ -1,18 +1,38 @@
+if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 browser.webRequest.onSendHeaders.addListener(
   function (details) {
     url_rid.set(details.url, details.requestId);
     rid_inf.set(details.requestId, [details.url, details.requestHeaders]);
   },
-  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"]},
+  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"].filter(Array.prototype.includes.bind(Object.values(browser.webRequest.ResourceType)))},
   ["requestHeaders"]
 );
 browser.downloads.onCreated.addListener(
   function (item) {
-    const inf = url_rid.has(item.url) ? rid_inf.get(url_rid.get(item.url)) : [item.url, []];
+    if (! item.filename) {return;}
+    const url = item.finalUrl ?? item.url;
+    const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, []];
     const did = item.id;
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
     Promise.all([get_sid(), get_histopts()]).then(
       function ([sid, histopts]) {
+        const sdid = `${sid}_${did}`;
+        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
+      }
+    );
+  }
+);
+browser.downloads.onChanged.addListener(
+  function (delta) {
+    if (! Object.hasOwn(delta, "filename")) {return;}
+    Promise.all([get_sid(), get_histopts(), browser.downloads.search({id: delta.id})]).then(
+      function ([sid, histopts, results]) {
+        if (results.length != 1) {return;}
+        const item = results[0];
+        const url = item.finalUrl ?? item.url;
+        const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, []];
+        const did = item.id;
+        const dinf = {url: inf[0], file: delta.filename.current, headers: inf[1]};
         const sdid = `${sid}_${did}`;
         Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
       }
@@ -51,7 +71,7 @@ function get_sid() {
           return results.sid;
         } else {
           const sid = Date.now();
-          return browser.storage.session.set({"sid": sid}).then(() => sid);
+          return browser.storage.session.set({sid}).then(() => sid);
         }
       }
     );
@@ -67,7 +87,7 @@ function get_histopts() {
         } else {
           return browser.storage.local.get().then(
             function (results) {
-              const histopts = [(Object.hasOwn(results, "histper") ? results.histper : 7) , (Object.hasOwn(results, "histinco") ? results.histinco : false)];
+              const histopts = [(results.histper ?? 7) , (results.histinco ?? false)];
               const a = {histopts};
               const d = [];
               for (const r of Object.entries(results)) {

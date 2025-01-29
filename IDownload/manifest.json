@@ -16,10 +16,10 @@
   "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["background.js"],
-    "type": "module"
+    "service_worker": "background.js"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self';"
+    "extension_pages": "script-src 'self'; object-src 'none'"
   },
   "action": {
     "default_title": "IDownload",
@@ -27,6 +27,7 @@
   },
   "options_ui": {
     "page": "options.html"
-  }
+  },
+  "key": "IDownload/+/"
 }
 

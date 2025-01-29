@@ -1,0 +1,7 @@
+{
+  "name": "idownload",
+  "description": "Interruptible download script",
+  "path": "idownload.bat",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://hhjndoalmkldggdajccahmpodplmennb/"]
+}

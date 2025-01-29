@@ -1,4 +1,5 @@
 "use strict";
+if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 function show_msg() {
   const m = document.createElement("span");
   m.innerText = this;

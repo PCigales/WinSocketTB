@@ -83,13 +83,13 @@
           &::before {
             content: attr(class)": ";
             display: inline-block;
-            width: 6em;
+            width: 7em;
             text-transform: capitalize;
           }
-          &not(.progression)>span {
+          &:not(.progression)>span {
             position: absolute;
             display: inline-block;
-            max-width: calc(100% - 6em);
+            max-width: calc(100% - 7em);
             overflow: auto;
             scrollbar-width: none;
             &:is(.size, .downloaded) {
@@ -109,18 +109,19 @@
               align-items: center;
               align-content: center;
               width: max(10em, 100% - 9em);
-              vertical-align: text-bottom;
+              vertical-align: -0.2em;
               &:empty {
                 display: none;
               }
               &>progress {
                 min-width: 0;
                 max-width: none;
+                accent-color: #0060df;
               }
             }
             &>span.percent {
               &:not(:empty)::after {
-                content: "%";
+                content: " %";
               }
               &:empty::after {
                 content: "?";
@@ -128,7 +129,7 @@
             }
             &>span.bar:not(:empty)+span.percent:not(:empty) {
               display: inline-block;
-              width: 3em;
+              width: 3.2em;
               text-align: right;
             }
           }

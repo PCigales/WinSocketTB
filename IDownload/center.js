@@ -1,4 +1,5 @@
 "use strict";
+if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 const sid = (new URLSearchParams(location.search)).get("sid");
 const num_form = Intl.NumberFormat();
 const progresses = new Map();
@@ -13,9 +14,9 @@ async function set_progress(sdid) {
   download.getElementsByClassName("size")[1].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
   download.getElementsByClassName("status")[1].innerText = progress.status;
   download.getElementsByClassName("downloaded")[1].innerText = num_form.format(progress.downloaded);
-  download.getElementsByClassName("bar")[0].innerHTML = progress.sections ? progress.sections.reduce((a, c) => `${a}<progress max="${c.size}" value="${c.downloaded}" style="flex: ${c.size} 1 ${c.size}px"></progress>`, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="${progress.size}" value="${progress.downloaded}" style="flex: 1 1 1px"></progress>` : "");
+  download.getElementsByClassName("bar")[0].innerHTML = Object.hasOwn(progress, "sections") ? progress.sections.reduce(function (a, c) {const b = Math.round(c.size * 1000000 / progress.size); return `${a}<progress max="${b}" value="${Math.round(c.downloaded * 1000000 / progress.size)}" style="flex: ${b} 1 ${b}px"></progress>`;}, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="1000000" value="${Math.round(progress.downloaded * 1000000 / progress.size)}" style="flex: 1 1 1px"></progress>` : "");
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
-  if (progress.status == "aborted" && progress.sections) {
+  if (progress.status == "aborted" && Object.hasOwn(progress, "sections")) {
     await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]).then((results) => browser.storage.local.set(Object.fromEntries(Object.keys(results).map((r) => ["p" + r.substring(1), progress]))));
   }
 }
@@ -96,7 +97,7 @@ function send_command() {
     case "resume":
       if (download.className != "aborted") {break;}
       download.className = "";
-      browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({"sdid": sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(Object.hasOwn(progresses.get(sdid), "sections") ? results : {}).then(function () {download.className = "aborted";})));
+      browser.storage.local.get(["p0_" + sdid, "p1_" + sdid]).then((results) => browser.storage.local.remove(Object.keys(results)).then(() => browser.runtime.sendMessage({sdid, "progress": progresses.get(sdid)})).then(function (response) {if (! response) {throw null;}}).catch(() => browser.storage.local.set(Object.hasOwn(progresses.get(sdid), "sections") ? results : {}).then(function () {download.className = "aborted";})));
       break;
   }
 }
@@ -105,11 +106,9 @@ Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), b
     if (tabs.length > 1 || results.sid?.toString() != sid) {
       browser.tabs.getCurrent().then((tab) => browser.tabs.remove(tab.id));
     } else {
-      browser.storage.local.get({port: 9009}).then(
-        function (results) {port = results.port;},
-        function () {port = 9009;}
-      ).then(() => browser.storage.local.get()).then(
+      browser.storage.local.get().then(
         function (results) {
+          port = results.port ?? 9009;
           for (const d of Object.entries(results).filter((r) => r[0][0] == "p" && r[0][2] == "_").map((r) => [r[0].substring(3).split('_'), r[1]]).sort((d1, d2) => (d1[0][0] - d2[0][0]) || (d1[0][1] - d2[0][1]))) {
             const sdid = d[0].join("_");
             progresses.set(sdid, d[1]);
@@ -117,7 +116,7 @@ Promise.all([browser.tabs.query({url: browser.runtime.getURL(location.href)}), b
           }
           return create();
         },
-        Boolean
+        function () {port = 9009;}
       ).then(new_socket);
     }
   }
