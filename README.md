@@ -19,4 +19,4 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 16. Time based One Time Password: TOTPassword
 
 Usage: from SocketTB import *  
-See test.py for examples and also the IDownload Firefox extension
+See test.py for examples and also the IDownload Firefox / Edge extension
