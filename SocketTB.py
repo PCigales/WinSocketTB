@@ -3542,10 +3542,12 @@ class HTTPRequestHandler(RequestHandler):
       'Accept-Ranges: bytes\r\n' \
       '%s' \
       '%s' \
-      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True))))
+      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, (rrange[1] - rrange[0] if rrange else rsize), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('%sLast-Modified: %s\r\n' % (('Content-Disposition: attachment\r\n' if self.server.recommend_downloading else ''), email.utils.formatdate(rmod, usegmt=True)))))
     return self._send(resp, rbody, rsize, rrange)
 
   def _send_resp_chnk(self, rtype, rsize, rbody, rmod, rrange=None, enc=False, tenc=False):
+    if rrange and enc:
+      return False
     resp = \
       'HTTP/1.1 %s\r\n' \
       'Content-Type: %s\r\n' \
@@ -3557,9 +3559,7 @@ class HTTPRequestHandler(RequestHandler):
       'Accept-Ranges: bytes\r\n' \
       '%s' \
       '%s' \
-      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, ((', %s' % tenc[0]) if tenc else ''), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('Last-Modified: %s\r\n' % email.utils.formatdate(rmod, usegmt=True))))
-    if rrange and enc:
-      return False
+      '\r\n' % (('200 OK' if rrange is None else '206 Partial Content'), rtype, ((', %s' % tenc[0]) if tenc else ''), email.utils.formatdate(time.time(), usegmt=True), (('Content-Encoding: %s\r\n' % enc[0]) if enc else ''), ('' if rrange is None else ('Content-Range: bytes %d-%d/%d\r\n' % (rrange[0], rrange[1] - 1, rsize))), ('' if rmod is None else ('%sLast-Modified: %s\r\n' % (('Content-Disposition: attachment\r\n' if self.server.recommend_downloading else ''), email.utils.formatdate(rmod, usegmt=True)))))
     try:
       self.request.sendall(resp.encode('ISO-8859-1'))
       if isinstance(rbody, IOBase):
@@ -3652,13 +3652,12 @@ class HTTPRequestHandler(RequestHandler):
       return None, None, None
     return apath, rpath, osort
 
-  @classmethod
-  def _html_from_dir(cls, apath, rpath, osort='', upl=False):
+  def _html_from_dir(self, apath, rpath, osort='', upl=False):
     l = [(e.is_dir(), e.name, e.stat()) for e in os.scandir(apath) if (e.is_dir() or e.is_file())]
     nsort = '?NA'
     msort = '?MA'
     ssort = '?SA'
-    _fn_cmp = cls._fn_cmp
+    _fn_cmp = self.__class__._fn_cmp
     if osort == 'ND':
       l.sort(key=lambda t:_fn_cmp(LPCWSTR(t[1])), reverse=True)
     else:
@@ -3682,7 +3681,7 @@ class HTTPRequestHandler(RequestHandler):
       rn = e[1] + '/' if e[0] else e[1]
       mt = time.strftime('%Y-%m-%d %H:%M', time.localtime(e[2].st_mtime))
       s = '-' if e[0] else format(e[2].st_size, ',d').replace(',', '·')
-      l[i] = '      <tr><td><a href="%s">%s</a><td align="right">&nbsp;&nbsp;%s&nbsp;&nbsp;</td><td align="right">%s</td></tr>\r\n' %(urllib.parse.quote(rn, errors='surrogatepass'), html.escape(n), mt, s)
+      l[i] = '      <tr><td><a href="%s"%s>%s</a><td align="right">&nbsp;&nbsp;%s&nbsp;&nbsp;</td><td align="right">%s</td></tr>\r\n' %(urllib.parse.quote(rn, errors='surrogatepass'), (' download=""' if self.server.recommend_downloading else ''), html.escape(n), mt, s)
     rbody = \
       '<!DOCTYPE html>\r\n' \
       '<html lang="en">\r\n' \
@@ -3921,8 +3920,9 @@ class HTTPRequestHandler(RequestHandler):
 
 class HTTPIServer(TCPIServer):
 
-  def __init__(self, server_address, root_directory=None, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
+  def __init__(self, server_address, root_directory=None, recommend_downloading=False, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
     self.root = os.path.abspath(root_directory or os.getcwd())
+    self.recommend_downloading = recommend_downloading
     self.max_upload = max_upload_size
     super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
 
