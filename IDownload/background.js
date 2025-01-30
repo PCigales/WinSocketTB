@@ -4,8 +4,8 @@ browser.webRequest.onSendHeaders.addListener(
     url_rid.set(details.url, details.requestId);
     rid_inf.set(details.requestId, [details.url, details.requestHeaders]);
   },
-  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"].filter(Array.prototype.includes.bind(Object.values(browser.webRequest.ResourceType)))},
-  ["requestHeaders"]
+  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"].filter(function (e) {return this.includes(e);}, Object.values(browser.webRequest.ResourceType))},
+  ["requestHeaders", "extraHeaders"].filter(function (e) {return this.includes(e);}, Object.values(browser.webRequest.OnSendHeadersOptions))
 );
 browser.downloads.onCreated.addListener(
   function (item) {
