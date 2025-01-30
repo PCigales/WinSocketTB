@@ -1,3 +1,4 @@
+"use strict";
 if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 browser.webRequest.onSendHeaders.addListener(
   function (details) {
@@ -9,7 +10,7 @@ browser.webRequest.onSendHeaders.addListener(
 );
 browser.downloads.onCreated.addListener(
   function (item) {
-    if (! item.filename) {return;}
+    if (! item.filename || item.state != "in_progress") {return;}
     const url = item.finalUrl ?? item.url;
     const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, []];
     const did = item.id;
