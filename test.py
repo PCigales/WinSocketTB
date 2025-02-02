@@ -173,6 +173,9 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   print(pcon)
   print(HTTPRequest('http://localhost:9000/nul', method='PUT', data=b'0' * 11, pconnection=pcon))
   print(pcon)
+  u = HTTPIUpload('http://localhost:9000/nul', data=b'0' * 8)
+  u.start()
+  print(u.wait_finish())
   b = io.BytesIO()
   with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=3, timeout=5, block_size=4) as d:
     while d.wait_progression() <= 60:

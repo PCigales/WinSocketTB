@@ -33,7 +33,7 @@ import struct
 import textwrap
 import subprocess
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -2794,9 +2794,31 @@ class _HTTPBaseRequest:
         headers['Expect'] = '100-continue'
       if 'accept-encoding' not in (k.lower() for k, v in hitems):
         headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip') if decompress else 'identity'
+      data_str = None
       if data is not None:
-        if 'chunked' not in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
-          headers['Content-Length'] = str(len(data))
+        if hasattr(data, 'read'):
+          for k, v in hitems:
+            if k.lower() == 'transfer-encoding':
+              data_str= k
+              if 'chunked' in map(str.strip, v.lower().split(',')):
+                data_str = -1
+                break
+          else:
+            for k, v in hitems:
+              if k.lower() == 'content-length':
+                data_str = int(v)
+            if isinstance(data_str, int):
+              headers['Content-Length'] = str(data_str)
+            else:
+              if data_str is None:
+                headers['transfer-encoding'] = 'chunked'
+              else:
+                headers[data_str] += ', chunked'
+              data_str = -2
+        else:
+          data_str = False
+          if 'chunked' not in (e.strip() for k, v in hitems if k.lower() == 'transfer-encoding' for e in v.lower().split(',')):
+            headers['Content-Length'] = str(len(data))
       headers['Connection'] = 'close' if hccl else 'keep-alive'
       hauth = headers.get('Authorization')
     except:
@@ -2828,22 +2850,48 @@ class _HTTPBaseRequest:
           rem_time = cls._rem_time(None, end_time)
           pconnection[0].settimeout(rem_time)
           msg = cls.RequestPattern % (method, path, url_p.netloc, ''.join(k + ': ' + v + '\r\n' for k, v in (headers if not ck else {**headers, 'Cookie': '; '.join(k + '=' + v[0] for k, v in ck.items())}).items()))
-          if hexp and data:
+          if not data:
             pconnection[0].sendall(msg.encode('iso-8859-1'))
-            rem_time = cls._rem_time(3 if timeout is None else min(3, timeout), end_time)
-            if max_length < 0:
-              resp = HTTPStreamMessage(pconnection[0], decompress=Fals, max_hlength=max_hlength, max_time=rem_time)
-            else:
-              resp = HTTPMessage(pconnection[0], body=(method.upper() != 'HEAD'), decompress=False, decode=None, max_length=max_length, max_hlength=max_hlength, max_time=rem_time)
-            code = resp.code
-            if code is None:
-              code = '100'
-            if code == '100':
-              rem_time = cls._rem_time(None, end_time)
-              pconnection[0].settimeout(rem_time)
-              pconnection[0].sendall(data)
+          elif not hexp and data_str is False:
+            pconnection[0].sendall(msg.encode('iso-8859-1') + data)
           else:
-            pconnection[0].sendall(msg.encode('iso-8859-1') + (data or b''))
+            pconnection[0].sendall(msg.encode('iso-8859-1'))
+            if hexp:
+              rem_time = cls._rem_time(3 if timeout is None else min(3, timeout), end_time)
+              if max_length < 0:
+                resp = HTTPStreamMessage(pconnection[0], decompress=Fals, max_hlength=max_hlength, max_time=rem_time)
+              else:
+                resp = HTTPMessage(pconnection[0], body=(method.upper() != 'HEAD'), decompress=False, decode=None, max_length=max_length, max_hlength=max_hlength, max_time=rem_time)
+              code = resp.code
+              if code is None:
+                code = '100'
+              if code == '100':
+                rem_time = cls._rem_time(None, end_time)
+                pconnection[0].settimeout(rem_time)
+                if data_str is False:
+                  pconnection[0].sendall(data)
+            if data_str is not False and code == '100':
+              if data_str >= 0:
+                r = data_str
+                while r > 0:
+                  b = data.read(min(r, 1048576))
+                  if not b:
+                    b = b'\x00' * min(r, 1048576)
+                  pconnection[0].sendall(b)
+                  r -= len(b)
+              elif data_str == -1:
+                while True:
+                  b = data.read(1048576)
+                  if not b:
+                    break
+                  pconnection[0].sendall(b)
+              else:
+                while True:
+                  b = data.read(1048576)
+                  if not b:
+                    break
+                  pconnection[0].sendall(b'%x\r\n%b\r\n' % (len(b), b))
+                pconnection[0].sendall(b'0\r\n\r\n')
           rem_time = cls._rem_time(None, end_time)
         except TimeoutError:
           raise
@@ -2914,7 +2962,7 @@ class _HTTPBaseRequest:
             if code == '303':
               if method.upper() != 'HEAD':
                 method = 'GET'
-              data = None
+              data = data_str = None
               for k in list(headers.keys()):
                 if k.lower() in ('transfer-encoding', 'content-length', 'content-type', 'expect'):
                   del headers[k]
@@ -5175,7 +5223,6 @@ class HTTPIDownload:
         th.start()
 
   def start(self):
-    end = False
     with self._lock:
       if self._req is None or self._file is None or self._threads:
         return
@@ -5183,12 +5230,9 @@ class HTTPIDownload:
         self._progress['status'] = 'starting'
         self._progress['eventing']['status'] = True
         self._progress['eventing']['condition'].notify_all()
-      if not end:
-        th = threading.Thread(target=self._start)
-        self._threads.append(th)
-        th.start()
-    if end:
-      self.stop(False)
+      th = threading.Thread(target=self._start)
+      self._threads.append(th)
+      th.start()
 
   def stop(self, block_on_close=True):
     with self._lock:
@@ -5276,7 +5320,7 @@ class HTTPIDownload:
     self.stop()
 
   def __repr__(self):
-    return '\r\n'.join(('<HTTPIDownload at %#x>\r\n----------' % id(self), *('%s: %s' % (k.title(), v) for k, v in self.progress.items() if k not in ('workers', 'sections'))))
+    return '\r\n'.join(('<HTTPIDownload at %#x>\r\n----------' % id(self), 'Url: ' + self.url, *('%s: %s' % (k.title(), v) for k, v in self.progress.items() if k not in ('workers', 'sections'))))
 
 
 class HTTPIListDownload:
@@ -5400,6 +5444,176 @@ class HTTPIListDownload:
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['processed']), timeout)
       self._progress['eventing']['processed'] = False
       return {k: self._progress[k] for k in ('number', 'running', 'completed', 'aborted')}
+
+
+class HTTPIUpload:
+  _mimetypes = mimetypes.MimeTypes(strict=False)
+  _mimetypes.read_windows_registry(strict=False)
+  _mimetypes.encodings_map = {}
+  _encode_mimetypes = ({'example', 'text', 'message', 'font'}, {'application/javascript', 'application/ecmascript', 'application/x-ecmascript', 'application/x-javascript', 'application/x-sh', 'application/x-csh', 'application/json', 'application/ld+json', 'application/manifest+json', 'application/vnd.api+json', 'application/rtf', 'application/xml', 'application/xhtml+xml', 'application/atom+xml', 'application/rss+xml', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/font-sfnt', 'application/vnd.ms-fontobject', 'application/xfont-ttf', 'application/xfont-opentype', 'application/xfont-truetype', 'application/wasm', 'application/x-httpd-php', 'application/x-httpd-python', 'application/n-quads', 'application/n-triples', 'application/postscript', 'application/x-python-code', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon', 'multipart/form-data'})
+
+  class _BrotliCompressor:
+    def __new__(cls):
+      if brotli:
+        return object.__new__(cls)
+      else:
+        return None
+    def __init__(self):
+      self.compressor = brotli.Compressor(quality=8, lgwin=19)
+    def compress(self, data):
+      return self.compressor.process(data)
+    def flush(self):
+      return self.compressor.finish()
+
+  class _Compressor:
+    def __init__(self, file, length, comp):
+      self.file = file
+      self.length = length
+      self.comp = comp
+      self.bbuf = ssl.MemoryBIO()
+    def read(self, size):
+      while self.bbuf.pending < size:
+        if self.length == 0:
+          break
+        b = self.file.read(min(self.length, 1048576))
+        if b:
+          self.length -= len(b)
+          self.bbuf.write(self.comp.compress(b))
+        else:
+          self.length = 0
+        if self.length == 0:
+          self.bbuf.write(self.comp.flush())
+      return self.bbuf.read(size)
+
+  def __new__(cls, url, data=None, headers=None, file_range=None, file_compress=None, timeout=30, max_hlength=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+    self = object.__new__(cls)
+    self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
+    self.url = url
+    hitems = tuple(((k.strip(), v) for k, v in headers.items()) if isinstance(headers, dict) else ((k.strip(), v.strip()) for k, v in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e)))
+    try:
+      self.headers = {k: v for k, v in hitems if k.lower() not in ('host', 'accept-encoding', 'te', 'content-length', 'content-encoding', 'transfer-encoding', 'range')} if isinstance(data, (str, int)) else {k: v for k, v in hitems if k.lower() not in ('host', 'accept-encoding', 'te')}
+    except:
+      return None
+    self._req = lambda r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, 'PUT', headers=self.headers, data=self._data, timeout=timeout, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
+    self._lock = threading.Lock()
+    self._thread = None
+    self._finish = [threading.Event(), 'waiting']
+    self._file = None
+    if url.endswith('/'):
+      self._data = None
+      return self
+    if data is None:
+      return None
+    if isinstance(data, str):
+      path = os.path.abspath(os.path.expandvars(data))
+      if os.path.isdir(path):
+        data = os.path.normpath(os.path.join(path, os.path.basename(urllib.parse.urlsplit(url).path.split(';', 1)[0]).lstrip('\\')))
+        if os.path.commonpath((path, data)) != path or os.path.basename(data) in ('', '.', '..'):
+          return None
+      elif os.path.basename(data) in ('', '.', '..'):
+        return None
+      else:
+        data = path
+      try:
+        self._file = open(data, 'rb')
+      except:
+        return None
+      if 'content-type' not in (k.lower() for k, v in hitems):
+        self.headers['Content-Type'] = self.__class__._mimetypes.guess_type(data, strict=False)[0] or 'application/octet-stream'
+    elif isinstance(data, int):
+      self._file = open(data, 'rb', closefd=False)
+    elif hasattr(data, 'read'):
+      try:
+        if not data.readable():
+          return None
+      except:
+        return None
+      self._data = data
+    else:
+      self._data = data
+    if isinstance(data, (str, int)):
+      fsize = os.stat(self._file.fileno()).st_size
+      if file_range is None:
+        self._file.seek(0, os.SEEK_SET)
+      else:
+        try:
+          rrange = ((file_range[0] if file_range[0] >= 0 else fsize + file_range[0]), (fsize if file_range[1] is None else (file_range[1] if file_range[1] >= 0 else fsize + file_range[1]) + 1))
+          if rrange[0] < 0 or rrange[0] > rrange[1] or rrange[1] > fsize:
+            raise
+          self._file.seek(rrange[0], os.SEEK_SET)
+        except:
+          try:
+            self._file.close()
+          except:
+            pass
+          return None
+        self.headers['Range'] = "bytes=%d-%d" % (rrange[0], rrange[1] - 1)
+      if file_compress is not None:
+        file_compress = file_compress.lower()
+        mt = 'application/octet-stream'
+        for k, v in self.headers.items():
+          if k.lower() == 'content-type':
+            mt = v
+        if mt in cls._encode_mimetypes[1] or mt.split('/', 1)[0] in cls._encode_mimetypes[0]:
+          comp = {'deflate': zlib.compressobj(wbits=15), 'gzip': zlib.compressobj(wbits=31), 'br': cls._BrotliCompressor()}.get(file_compress)
+        else:
+          comp = None
+        if comp:
+          self.headers['Content-Encoding' if file_range is None else 'Transfer-Encoding'] = file_compress
+        else:
+          file_compress = None
+      if file_compress is None:
+        self.headers['Content-Length'] = fsize if file_range is None else rrange[1] - rrange[0]
+        self._data = self._file
+      else:
+        self._data = cls._Compressor(self._file, (fsize if file_range is None else rrange[1] - rrange[0]), comp)
+    return self
+
+  def _start(self):
+    rep = None
+    try:
+      req = self._req
+      if req is None:
+        return
+      rep = self._req()
+    except:
+      pass
+    finally:
+      self._finish[1] = 'completed' if rep and rep.code.startswith('2') else 'aborted'
+      self.stop(False)
+    
+  def start(self):
+    with self._lock:
+      if self._req is None:
+        return
+      self._thread = threading.Thread(target=self._start)
+      self._finish[1] = 'working'
+      self._thread.start()
+
+  def stop(self, block_on_close=True):
+    with self._lock:
+      if self._req is None:
+        return
+      self._req = None
+      self.isocketgen.close()
+      self._finish[0].set()
+      if self._thread is None:
+        self._finish[1] = 'aborted'
+    if self._file:
+      try:
+        self._file.close()
+      except:
+        pass
+    if block_on_close:
+      if self._thread is not None:
+        self._thread.join()
+
+  def wait_finish(self, timeout=None):
+    self._finish[0].wait(timeout)
+    return self._finish[1]
+
+  def __repr__(self):
+    return '\r\n'.join(('<HTTPIUpload at %#x>\r\n----------' % id(self), 'Url: ' + self.url))
 
 
 class NTPClient:
