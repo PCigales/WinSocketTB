@@ -2799,7 +2799,7 @@ class _HTTPBaseRequest:
         if hasattr(data, 'read'):
           for k, v in hitems:
             if k.lower() == 'transfer-encoding':
-              data_str= k
+              data_str = k
               if 'chunked' in map(str.strip, v.lower().split(',')):
                 data_str = -1
                 break
@@ -2847,8 +2847,7 @@ class _HTTPBaseRequest:
         path = cls.connect(url, url_p, headers, timeout, max_hlength if max_length < 0 else min(max_length, max_hlength), end_time, pconnection, ip)
         try:
           code = '100'
-          rem_time = cls._rem_time(None, end_time)
-          pconnection[0].settimeout(rem_time)
+          pconnection[0].settimeout(cls._rem_time(None, end_time))
           msg = cls.RequestPattern % (method, path, url_p.netloc, ''.join(k + ': ' + v + '\r\n' for k, v in (headers if not ck else {**headers, 'Cookie': '; '.join(k + '=' + v[0] for k, v in ck.items())}).items()))
           if not data:
             pconnection[0].sendall(msg.encode('iso-8859-1'))
@@ -2865,11 +2864,9 @@ class _HTTPBaseRequest:
               code = resp.code
               if code is None:
                 code = '100'
-              if code == '100':
-                rem_time = cls._rem_time(None, end_time)
-                pconnection[0].settimeout(rem_time)
-                if data_str is False:
-                  pconnection[0].sendall(data)
+              if code == '100' and data_str is False:
+                pconnection[0].settimeout(cls._rem_time(None, end_time))
+                pconnection[0].sendall(data)
             if data_str is not False and code == '100':
               if data_str >= 0:
                 r = data_str
@@ -2877,6 +2874,7 @@ class _HTTPBaseRequest:
                   b = data.read(min(r, 1048576))
                   if not b:
                     b = b'\x00' * min(r, 1048576)
+                  pconnection[0].settimeout(cls._rem_time(None, end_time))
                   pconnection[0].sendall(b)
                   r -= len(b)
               elif data_str == -1:
@@ -2884,13 +2882,16 @@ class _HTTPBaseRequest:
                   b = data.read(1048576)
                   if not b:
                     break
+                  pconnection[0].settimeout(cls._rem_time(None, end_time))
                   pconnection[0].sendall(b)
               else:
                 while True:
                   b = data.read(1048576)
                   if not b:
                     break
+                  pconnection[0].settimeout(cls._rem_time(None, end_time))
                   pconnection[0].sendall(b'%x\r\n%b\r\n' % (len(b), b))
+                pconnection[0].settimeout(cls._rem_time(None, end_time))
                 pconnection[0].sendall(b'0\r\n\r\n')
           rem_time = cls._rem_time(None, end_time)
         except TimeoutError:
