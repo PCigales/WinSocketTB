@@ -177,11 +177,12 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   u.start()
   print(u.wait_finish())
   b = io.BytesIO()
-  with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=3, timeout=5, block_size=4) as d:
-    while d.wait_progression() <= 60:
+  with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=3, timeout=5, section_min=2, block_size=2) as d:
+    while int(d.wait_progression().rstrip(' %')) <= 25:
       print(d.wait_sections(0))
-    print(d)
-  with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=2, timeout=5, block_size=4, resume=d) as d:
+    d.stop()
+  print(d)
+  with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=2, timeout=5, section_min=4, block_size=4, resume=d) as d:
     while d.wait_finish(0) not in ('completed', 'aborted'):
       print(d.wait_sections())
     print(d)
