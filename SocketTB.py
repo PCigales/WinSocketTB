@@ -34,7 +34,7 @@ import textwrap
 import subprocess
 from msvcrt import get_osfhandle
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
+__afll__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -4879,7 +4879,7 @@ class WebSocketIDClient(WebSocketHandler):
 
 class HTTPIDownload:
 
-  def __new__(cls, url, file='', headers=None, max_workers=8, section_min=1048576, file_preallocate=True, file_sparse=False, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None, resume=None):
+  def __new__(cls, url, file='', headers=None, max_workers=8, section_min=1048576, file_preallocate=None, file_sparse=False, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None, resume=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
@@ -4924,24 +4924,13 @@ class HTTPIDownload:
         self._close = True
       except:
         return None
-      if not resume:
-        if file_sparse:
-          try:
-            br = DWORD()
-            if kernel32.DeviceIoControl(HANDLE(get_osfhandle(self.file.fileno())), DWORD(590020), None, DWORD(0), None, DWORD(0), byref(br), None):
-              if file_preallocate:
-                self._file_fz = 2
-            else:
-              raise
-          except:
-            if file_preallocate:
-              self._file_fz = 1
-        elif file_preallocate:
-          self._file_fz = 1
     elif isinstance(file, int):
-      self.file = open(file, ('r+b' if resume else 'wb'), closefd=False)
-      self.file.seek(0, os.SEEK_SET)
-      self._close = True
+      try:
+        self.file = open(file, ('r+b' if resume else 'wb'), closefd=False)
+        self.file.seek(0, os.SEEK_SET)
+        self._close = True
+      except:
+        return None
     else:
       try:
         if not file.seekable() or not file.writable():
@@ -4953,6 +4942,18 @@ class HTTPIDownload:
         return None
       self.file = file
       self._close = False
+    if not resume:
+      if file_preallocate is None:
+        file_preallocate = not isinstance(self.file, BytesIO)
+      if file_preallocate:
+        self._file_fz = 1
+      if file_sparse:
+        br = DWORD()
+        try:
+          if kernel32.DeviceIoControl(HANDLE(get_osfhandle(self.file.fileno())), DWORD(590020), None, DWORD(0), None, DWORD(0), byref(br), None) and file_preallocate:
+            self._file_fz = 2
+        except:
+          pass
     self._file = self.file
     self._bsize = math.ceil(max(block_size, 1024))
     self._maxworks = math.floor(max(max_workers, 1))
@@ -5209,14 +5210,18 @@ class HTTPIDownload:
       if self._file is not None and size:
         try:
           if self._file_fz == 1:
-            self._file.truncate(size)
+            self._file.seek(0, os.SEEK_SET)
+            b = b'0' * 1048576
+            for i in range(size // 1048576):
+              self._file.write(b)
+            size %= 1048576
+            if size:
+              self._file.write(b[:size])
+            self._file.seek(0, os.SEEK_SET)
           elif self._file_fz == 2:
             h = HANDLE(get_osfhandle(self._file.fileno()))
-            if not kernel32.SetFilePointerEx(h, size, None, 0) or not kernel32.SetEndOfFile(h):
+            if not kernel32.SetFilePointerEx(h, size, None, 0) or not kernel32.SetEndOfFile(h) or not kernel32.SetFilePointerEx(h, 0, None, 0):
               return False
-            br = DWORD()
-            fzdi = FILE_ZERO_DATA_INFORMATION(0, size)
-            return bool(kernel32.DeviceIoControl(h, DWORD(622792), byref(fzdi), DWORD(ctypes.sizeof(fzdi)), None, DWORD(0), byref(br), None))
         except:
           return False
     return True
