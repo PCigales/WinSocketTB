@@ -1903,7 +1903,7 @@ class NestedSSLContext(ssl.SSLContext):
 
   def __setattr__(self, name, value):
     object.__setattr__(self, name, value)
-    if name not in ('DefaultSSLContext', 'ssl_read_ahead'):
+    if name not in {'DefaultSSLContext', 'ssl_read_ahead'}:
       self.DefaultSSLContext.__setattr__(name, value)
 
   def wrap_socket(self, sock, *args, **kwargs):
@@ -2057,9 +2057,9 @@ class HTTPMessage:
         header_name = header_name.strip().title()
         if header_name:
           header_value = header_value.strip()
-          if header_name not in ('Content-Length', 'Location', 'Host') and http_message.headers.get(header_name):
+          if header_name not in {'Content-Length', 'Location', 'Host'} and http_message.headers.get(header_name):
             if header_value:
-              http_message.headers[header_name] += ('\n' if header_name in ('Set-Cookie', 'Www-Authenticate', 'Proxy-Authenticate') else ', ') + header_value
+              http_message.headers[header_name] += ('\n' if header_name in {'Set-Cookie', 'Www-Authenticate', 'Proxy-Authenticate'} else ', ') + header_value
           else:
             http_message.headers[header_name] = header_value
         else:
@@ -2088,12 +2088,12 @@ class HTTPMessage:
         return False
       header_name = header_name.strip().title()
       if header_name:
-        if header_name in ('Transfer-Encoding', 'Content-Length', 'Host', 'Content-Encoding', 'Location'):
+        if header_name in {'Transfer-Encoding', 'Content-Length', 'Host', 'Content-Encoding', 'Location'}:
           continue
         header_value = header_value.strip()
         if http_message.headers.get(header_name):
           if header_value:
-            http_message.headers[header_name] += ('\n' if header_name in ('Set-Cookie', 'Www-Authenticate', 'Proxy-Authenticate') else ', ') + header_value
+            http_message.headers[header_name] += ('\n' if header_name in {'Set-Cookie', 'Www-Authenticate', 'Proxy-Authenticate'} else ', ') + header_value
         else:
           http_message.headers[header_name] = header_value
       else:
@@ -2830,7 +2830,7 @@ class _HTTPBaseRequest:
         hexp = '100-continue' in (e.strip() for k, v in hitems if k.lower() == 'expect' for e in v.lower().split(','))
       else:
         hexp = False
-      headers = {k: v for k, v in hitems if not k.lower() in ('host', 'content-length', 'connection', 'expect')}
+      headers = {k: v for k, v in hitems if not k.lower() in {'host', 'content-length', 'connection', 'expect'}}
       if hexp:
         headers['Expect'] = '100-continue'
       if 'accept-encoding' not in (k.lower() for k, v in hitems):
@@ -3012,7 +3012,7 @@ class _HTTPBaseRequest:
                 method = 'GET'
               data = data_str = None
               for k in list(headers.keys()):
-                if k.lower() in ('transfer-encoding', 'content-length', 'content-type', 'expect'):
+                if k.lower() in {'transfer-encoding', 'content-length', 'content-type', 'expect'}:
                   del headers[k]
           else:
             raise
@@ -4752,7 +4752,7 @@ class WebSocketIDClient(WebSocketHandler):
     ws_acc = base64.b64encode(sha1).decode('utf-8')
     if proxy is not None:
       proxy['tunnel'] = True
-    rep = HTTPRequestConstructor(self.idsocketgen, proxy)(channel_address, headers={**({} if headers is None else {k: v for k, v in headers.items() if k.lower() not in ('upgrade', 'connection', 'sec-websocket-version', 'sec-websocket-key')}), 'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
+    rep = HTTPRequestConstructor(self.idsocketgen, proxy)(channel_address, headers={**({} if headers is None else {k: v for k, v in headers.items() if k.lower() not in {'upgrade', 'connection', 'sec-websocket-version', 'sec-websocket-key'}}), 'Upgrade': 'websocket', 'Connection': 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': key}, max_time=connection_timeout, decompress=False, pconnection=self.pconnection, max_redir=0, ip=own_address)
     if rep.code != '101' or not rep.in_header('Upgrade', 'websocket') or rep.header('Sec-WebSocket-Accept') != ws_acc or rep.expect_close or not self.pconnection[0]:
       return None
     self.pconnection[0].settimeout(None)
@@ -4943,14 +4943,19 @@ class HTTPIDownload:
       self.file = file
       self._close = False
     if not resume:
+      h = None
       if file_preallocate is None:
-        file_preallocate = not isinstance(self.file, BytesIO)
+        try:
+          h = get_osfhandle(self.file.fileno())
+          file_preallocate = True
+        except:
+          pass
       if file_preallocate:
         self._file_fz = 1
       if file_sparse:
         br = DWORD()
         try:
-          if kernel32.DeviceIoControl(HANDLE(get_osfhandle(self.file.fileno())), DWORD(590020), None, DWORD(0), None, DWORD(0), byref(br), None) and file_preallocate:
+          if kernel32.DeviceIoControl(HANDLE(get_osfhandle(self.file.fileno()) if h is None else h), DWORD(590020), None, DWORD(0), None, DWORD(0), byref(br), None) and file_preallocate:
             self._file_fz = 2
         except:
           pass
@@ -5209,6 +5214,12 @@ class HTTPIDownload:
     with self._flock:
       if self._file is not None and size:
         try:
+          h = HANDLE(get_osfhandle(self._file.fileno()))
+        except:
+          h = None
+        try:
+          if h is not None and not kernel32.SetFilePointerEx(h, size, None, 0) or not kernel32.SetEndOfFile(h) or not kernel32.SetFilePointerEx(h, 0, None, 0):
+            return False
           if self._file_fz == 1:
             self._file.seek(0, os.SEEK_SET)
             b = b'0' * 1048576
@@ -5216,12 +5227,8 @@ class HTTPIDownload:
               self._file.write(b)
             size %= 1048576
             if size:
-              self._file.write(b[:size])
+              self._file.write(memoryview(b)[:size])
             self._file.seek(0, os.SEEK_SET)
-          elif self._file_fz == 2:
-            h = HANDLE(get_osfhandle(self._file.fileno()))
-            if not kernel32.SetFilePointerEx(h, size, None, 0) or not kernel32.SetEndOfFile(h) or not kernel32.SetFilePointerEx(h, 0, None, 0):
-              return False
         except:
           return False
     return True
@@ -5243,7 +5250,7 @@ class HTTPIDownload:
           rep = self._req(h)
           if rep.code != '200':
             raise
-        size = int(rep.header('Content-Length', 0))
+        size = 0 if rep.header('Content-Encoding') else int(rep.header('Content-Length', 0))
         if not size and section:
           try:
             size = int(rep.header('Content-Range', '').rpartition('/')[2])
@@ -5283,9 +5290,8 @@ class HTTPIDownload:
               self._progress['workers'].append([{'status': 'running', 'start': 0, 'size': size, 'downloaded': 0, 'percent': 0}])
               self._progress['eventing']['workers'] = True
               self._progress['eventing']['condition'].notify_all()
-            if self._file_fz:
-              if not self._fill_zero(size):
-                self._file_fz = None
+            if self._file_fz and not self._fill_zero(size):
+              self._file_fz = None
             if self._file_fz is not None:
               th.start()
         if self._file_fz is not None:
@@ -5305,9 +5311,8 @@ class HTTPIDownload:
           self._progress['eventing']['condition'].notify_all()
         th = threading.Thread(target=self._sdown, args=(rep,))
         self._threads.append(th)
-        if self._file_fz:
-          if not self._fill_zero(size):
-            self._file_fz = None
+        if self._file_fz and not self._fill_zero(size):
+          self._file_fz = None
         if self._file_fz is not None:
           th.start()
     if self._file_fz is None:
@@ -5569,7 +5574,7 @@ class HTTPIUpload(_MimeTypes):
     self.url = url
     hitems = tuple(((k.strip(), v) for k, v in headers.items()) if isinstance(headers, dict) else ((k.strip(), v.strip()) for k, v in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e)))
     try:
-      self.headers = {k: v for k, v in hitems if k.lower() not in ('host', 'accept-encoding', 'te', 'content-length', 'content-encoding', 'transfer-encoding', 'range')} if isinstance(data, (str, int)) else {k: v for k, v in hitems if k.lower() not in ('host', 'accept-encoding', 'te')}
+      self.headers = {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te', 'content-length', 'content-encoding', 'transfer-encoding', 'range'}} if isinstance(data, (str, int)) else {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te'}}
     except:
       return None
     self._req = lambda r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, 'PUT', headers=self.headers, data=self._data, timeout=timeout, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
