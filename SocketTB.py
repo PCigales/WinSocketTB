@@ -2221,7 +2221,7 @@ class HTTPMessage:
       if chunked:
         body_len = -1
       else:
-        body_len = http_message.header('Content-Length')
+        body_len = None if http_message.header('Transfer-Encoding') else http_message.header('Content-Length')
         if body_len is None:
           if not iss or (http_message.code in ('200', '206') and http_message.expect_close):
             body_len = -1
@@ -5250,7 +5250,7 @@ class HTTPIDownload:
           rep = self._req(h)
           if rep.code != '200':
             raise
-        size = 0 if rep.header('Content-Encoding') else int(rep.header('Content-Length', 0))
+        size = 0 if rep.header('Content-Encoding') or rep.header('Transfer-Encoding') else int(rep.header('Content-Length', 0))
         if not size and section:
           try:
             size = int(rep.header('Content-Range', '').rpartition('/')[2])
