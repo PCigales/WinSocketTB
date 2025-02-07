@@ -2074,6 +2074,8 @@ class HTTPMessage:
       http_message.method = a.upper()
       http_message.path = b
       http_message.version = c.upper()
+    if 'Transfer-Encoding' in http_message.headers:
+      http_message.headers.pop('Content-Length', None)
     http_message.expect_close = http_message.in_header('Connection', 'close') or (http_message.version.upper() != 'HTTP/1.1' and not http_message.in_header('Connection', 'keep-alive'))
     return True
 
@@ -2221,7 +2223,7 @@ class HTTPMessage:
       if chunked:
         body_len = -1
       else:
-        body_len = None if http_message.header('Transfer-Encoding') else http_message.header('Content-Length')
+        body_len = http_message.header('Content-Length')
         if body_len is None:
           if not iss or (http_message.code in ('200', '206') and http_message.expect_close):
             body_len = -1
@@ -3498,6 +3500,10 @@ class _MimeTypes:
   _mimetypes.encodings_map = {}
   _encode_mimetypes = ({'example', 'text', 'message', 'font'}, {'application/javascript', 'application/ecmascript', 'application/x-ecmascript', 'application/x-javascript', 'application/x-sh', 'application/x-csh', 'application/json', 'application/ld+json', 'application/manifest+json', 'application/vnd.api+json', 'application/rtf', 'application/xml', 'application/xhtml+xml', 'application/atom+xml', 'application/rss+xml', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/font-sfnt', 'application/vnd.ms-fontobject', 'application/xfont-ttf', 'application/xfont-opentype', 'application/xfont-truetype', 'application/wasm', 'application/x-httpd-php', 'application/x-httpd-python', 'application/n-quads', 'application/n-triples', 'application/postscript', 'application/x-python-code', 'image/svg+xml', 'image/x-icon', 'image/vnd.microsoft.icon', 'multipart/form-data'})
 
+  @classmethod
+  def _encode_mimetype(cls, mt):
+    return mt in cls._encode_mimetypes[1] or mt.split('/', 1)[0] in cls._encode_mimetypes[0]
+
 
 class HTTPRequestHandler(RequestHandler, _MimeTypes):
   _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
@@ -3521,14 +3527,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
             raise
         except:
           aenc[i] = (ae[0].strip(), 1)
-    pid = True
-    if not fid:
-      if mt in cls._encode_mimetypes[1]:
-        pid = False
-      else:
-        t, s = mt.partition('/')[::2]
-        if t in cls._encode_mimetypes[0]:
-          pid = False
+    pid = fid or not cls._encode_mimetype(mt)
     while True:
       senc = cls._encodings[0 if pid else 1]
       aenc.sort(key=lambda ae:senc.get(ae[0], 100))
@@ -4877,7 +4876,7 @@ class WebSocketIDClient(WebSocketHandler):
       th.start()
 
 
-class HTTPIDownload:
+class HTTPIDownload(_MimeTypes):
 
   def __new__(cls, url, file='', headers=None, max_workers=8, section_min=1048576, file_preallocate=None, file_sparse=False, timeout=30, max_hlength=1048576, block_size=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None, resume=None):
     self = object.__new__(cls)
@@ -5243,21 +5242,32 @@ class HTTPIDownload:
         rep = self._req(h)
         section = None
         if rep.code in ('200', '206'):
-          section = False if rep.header('Content-Encoding') else (rep.header('Accept-Ranges', 'none').lower() == 'bytes' or rep.header('Content-Range', '').split(' ')[0].strip().lower() == 'bytes' or None)
+          if rep.header('Content-Encoding'):
+            size = 0
+            section = False
+          else:
+            size = int(rep.header('Content-Length', 0))
+            if rep.header('Accept-Ranges', 'none').lower() == 'bytes' or rep.header('Content-Range', '').split(' ')[0].strip().lower() == 'bytes':
+              if not size:
+                try:
+                  size = int(rep.header('Content-Range', '').rpartition('/')[2])
+                except:
+                  pass
+              section = bool(size)
+            if not section:
+              section = rep.header('Transfer-Encoding', 'chunked').lower() == 'chunked' and self.__class__._encode_mimetype(rep.header('Content-Type', 'application/octet-stream').split(';', 1)[0].rstrip()) and (not size or size > 4 * self._secmin) and None
         if section is None:
+          try:
+            rep.body(-1)
+          except:
+            pass
           h = self.headers
           h['Accept-Encoding'] = h['TE']
           rep = self._req(h)
           if rep.code != '200':
             raise
-        size = 0 if rep.header('Content-Encoding') or rep.header('Transfer-Encoding') else int(rep.header('Content-Length', 0))
-        if not size and section:
-          try:
-            size = int(rep.header('Content-Range', '').rpartition('/')[2])
-          except:
-            pass
-          if not size:
-            section = False
+          size = 0 if rep.header('Content-Encoding') else int(rep.header('Content-Length', 0))
+          section = False
       except:
         self.stop(False)
         return
@@ -5641,7 +5651,7 @@ class HTTPIUpload(_MimeTypes):
           if k.lower() == 'content-type':
             mt = v
         comp = None
-        if mt in cls._encode_mimetypes[1] or mt.split('/', 1)[0] in cls._encode_mimetypes[0]:
+        if cls._encode_mimetype(mt):
           if file_compress == 'deflate':
             comp = zlib.compressobj(wbits=15)
           elif file_compress == 'gzip':
