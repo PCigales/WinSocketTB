@@ -3909,7 +3909,16 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 f = open(apath, 'rb')
                 h = HANDLE(get_osfhandle(f.fileno()))
                 fs = os.stat(f.fileno())
-                if not kernel32.LockFileEx(h, DWORD(1), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None))):
+                if rrange:
+                  try:
+                    rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, fs.st_size) if rrange[1] else fs.st_size)) if rrange[0] else (fs.st_size - int(rrange[1]), fs.st_size)
+                    if rrange[0] < 0 or rrange[0] >= rrange[1]:
+                      raise
+                  except:
+                    if not self._send_err_rns():
+                      closed = True
+                    continue
+                if not kernel32.LockFileEx(h, DWORD(1), DWORD(0), *self.split_int(rrange[1] - rrange[0] if rrange else fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(rrange[0] if rrange else 0)), None))):
                   self._send_err_c()
                   closed = True
                   continue
@@ -3927,15 +3936,6 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                       continue
                   except:
                     pass
-              if rrange:
-                try:
-                  rrange = (int(rrange[0]), (min(int(rrange[1]) + 1, fs.st_size) if rrange[1] else fs.st_size)) if rrange[0] else (fs.st_size - int(rrange[1]), fs.st_size)
-                  if rrange[0] < 0 or rrange[0] >= rrange[1]:
-                    raise
-                except:
-                  if not self._send_err_rns():
-                    closed = True
-                  continue
               if not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange, enc, tenc) if enc or tenc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange)):
                 closed = True
             else:
@@ -3994,13 +3994,13 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                     closed = True
                     continue
                 else:
-                  if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None))):
+                  if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
                     self._send_err_c()
                     closed = True
                     continue
                   f.seek(0, os.SEEK_SET)
                   f.truncate(0)
-                  kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None)))
+                  kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None)))
                 if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(rrlength), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(f.tell())), None))):
                   self._send_err_c()
                   closed = True
