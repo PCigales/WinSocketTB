@@ -72,6 +72,7 @@ STRUCTURE = ctypes.Structure
 BIGENDIANUNION = ctypes.BigEndianUnion
 UNION = ctypes.Union
 GUID = BYTE * 16
+ULONG_PTR = ctypes.wintypes.WPARAM
 WinError = ctypes.WinError
 ClosedError = lambda: WinError(10038)
 AlreadyError = lambda: WinError(10037)
@@ -168,6 +169,12 @@ class CRYPT_INTEGER_BLOB(STRUCTURE):
 class CERT_CONTEXT(STRUCTURE):
   _fields_ = [('dwCertEncodingType', DWORD), ('pbCertEncoded', PVOID), ('cbCertEncoded', DWORD), ('pCertInfo', PVOID), ('hCertStore', HANDLE)]
 P_CERT_CONTEXT = POINTER(CERT_CONTEXT)
+
+class OVERLAPPED_O(STRUCTURE):
+  _fields_= [('Offset', DWORD), ('OffsetHigh', DWORD)]
+class OVERLAPPED(STRUCTURE):
+  _anonymous_ = ('o',)
+  _fields_ = [('Internal', ULONG_PTR), ('InternalHigh', ULONG_PTR), ('o', OVERLAPPED_O), ('hEvent', HANDLE)]
 
 class FILE_ZERO_DATA_INFORMATION(STRUCTURE):
   _fields_ = [('FileOffset', LARGE_INTEGER), ('BeyondFinalZero', LARGE_INTEGER)]
@@ -3619,6 +3626,8 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
     return self._send_err(413, 'Payload too large')
   def _send_err_na(self):
     return self._send_err(406, 'Not Acceptable')
+  def _send_err_c(self):
+    return self._send_err(409, 'Conflict')
 
   def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None, enc=False):
     resp = \
@@ -3813,6 +3822,10 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       '</html>' % (*((html.escape(rpath),) * 2), nsort, msort, ssort, ('' if rpath == '/' else '     <tr><td><a href="../">Parent Directory</a><td align="right">&nbsp;&nbsp;&nbsp;&nbsp;</td><td align="right">-</td></tr>\r\n'), ''.join(l), ('<button onclick="cd()">Create directory</button>&nbsp;&nbsp;<button onclick="document.getElementsByTagName(\'input\')[0].click()">Upload file</button><input type="file" autocomplete="off" style="display:none;" onchange="uf(this.files[0]); this.value=\'\'">' if upl else ''))
     return rbody.encode('utf-8', errors='surrogateescape')
 
+  @staticmethod
+  def split_int(v):
+    return DWORD(v & ~(-1 << 32)), DWORD(v >> 32)
+
   def handle(self):
     closed = False
     root = self.server.root
@@ -3892,8 +3905,14 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 if not self._send_err_na():
                   closed = True
                 continue
-              f = open(apath, 'rb')
-              fs = os.stat(f.fileno())
+              with self.server._plock:
+                f = open(apath, 'rb')
+                h = HANDLE(get_osfhandle(f.fileno()))
+                fs = os.stat(f.fileno())
+                if not kernel32.LockFileEx(h, DWORD(1), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None))):
+                  self._send_err_c()
+                  closed = True
+                  continue
               if req.header('If-None-Match') is None:
                 ms = req.header('If-Modified-Since')
                 if ms is not None:
@@ -3954,26 +3973,38 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 closed = True
           else:
             try:
-              e = os.path.isfile(apath)
               rmlength = rrlength = self.server.max_upload
-              if rrange:
+              with self.server._plock:
+                e = os.path.isfile(apath)
                 f = open(apath, ('r+b' if e else 'wb'))
+                h = HANDLE(get_osfhandle(f.fileno()))
                 fs = os.stat(f.fileno())
-                try:
-                  if not rrange[0]:
-                    f.seek(-min(int(rrange[1]), fs.st_size), os.SEEK_END)
-                  else:
-                    f.seek(int(rrange[0]), os.SEEK_SET)
-                    if rrange[1]:
-                      rrlength = int(rrange[1]) + 1 - int(rrange[0])
-                      if rrlength < 0:
-                        raise
-                except:
-                  self._send_err_rns()
+                if rrange:
+                  try:
+                    if not rrange[0]:
+                      f.seek(-min(int(rrange[1]), fs.st_size), os.SEEK_END)
+                    else:
+                      f.seek(int(rrange[0]), os.SEEK_SET)
+                      if rrange[1]:
+                        rrlength = int(rrange[1]) + 1 - int(rrange[0])
+                        if rrlength < 0:
+                          raise
+                  except:
+                    self._send_err_rns()
+                    closed = True
+                    continue
+                else:
+                  if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None))):
+                    self._send_err_c()
+                    closed = True
+                    continue
+                  f.seek(0, os.SEEK_SET)
+                  f.truncate(0)
+                  kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(DWORD(0), DWORD(0)), None)))
+                if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(rrlength), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(f.tell())), None))):
+                  self._send_err_c()
                   closed = True
                   continue
-              else:
-                f = open(apath, 'wb')
               while rmlength >= 0:
                 b = req.body(1048576)
                 if not b:
@@ -3983,7 +4014,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                   continue
                 rrlength -= len(b)
                 if rmlength < 0 or rrlength < 0:
-                  f.write(b[:min(rmlength, rrlength)])
+                  f.write(memoryview(b)[:min(rmlength, rrlength)])
                 else:
                   f.write(b)
               if rmlength < 0:
@@ -4014,6 +4045,7 @@ class HTTPIServer(TCPIServer):
     self.root = os.path.abspath(root_directory or os.getcwd())
     self.recommend_downloading = recommend_downloading
     self.max_upload = max_upload_size
+    self._plock = threading.Lock()
     super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
 
 
