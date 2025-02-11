@@ -4021,7 +4021,6 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                     closed = True
                     self._send_err_c(True)
                     continue
-                print(rrlength, f.tell())
                 if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(rrlength), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(f.tell())), None))):
                   closed = True
                   self._send_err_c(True)
@@ -4049,10 +4048,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
               except:
                 pass
       else:
-        if req.body(1):
-          closed = True
-          self.request.settimeout(3)
-        if not self._send_err_ni():
+        if not self._send_err_ni(bool(req.body(1))):
           closed = True
 
 
