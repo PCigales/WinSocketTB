@@ -3590,7 +3590,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       '\r\n' % (', PUT' if self.server.max_upload else '')
     return self._send(resp)
 
-  def _send_err(self, e, m=''):
+  def _send_err(self, e, m='', c=False):
     rbody = \
       '<!DOCTYPE html>\r\n' \
       '<html lang="en">\r\n' \
@@ -3611,23 +3611,26 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Server: SocketTB\r\n' \
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
       '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True))
-    return self._send(resp, rbody)
-  def _send_err_ni(self):
-    return self._send_err(501, 'Not implemented')
-  def _send_err_nf(self):
-    return self._send_err(404, 'Not found')
-  def _send_err_rns(self):
-    return self._send_err(416, 'Range not satisfiable')
-  def _send_err_f(self):
-    return self._send_err(403, 'Forbidden')
-  def _send_err_mna(self):
-    return self._send_err(405, 'Method not allowed')
-  def _send_err_ptl(self):
-    return self._send_err(413, 'Payload too large')
-  def _send_err_na(self):
-    return self._send_err(406, 'Not Acceptable')
-  def _send_err_c(self):
-    return self._send_err(409, 'Conflict')
+    if c:
+      self.request.settimeout(3)
+    s = self._send(resp, rbody)
+    return not c and s 
+  def _send_err_ni(self, c=False):
+    return self._send_err(501, 'Not implemented', c)
+  def _send_err_nf(self, c=False):
+    return self._send_err(404, 'Not found', c)
+  def _send_err_rns(self, c=False):
+    return self._send_err(416, 'Range not satisfiable', c)
+  def _send_err_f(self, c=False):
+    return self._send_err(403, 'Forbidden', c)
+  def _send_err_mna(self, c=False):
+    return self._send_err(405, 'Method not allowed', c)
+  def _send_err_ptl(self, c=False):
+    return self._send_err(413, 'Payload too large', c)
+  def _send_err_na(self, c=False):
+    return self._send_err(406, 'Not Acceptable', c)
+  def _send_err_c(self, c=False):
+    return self._send_err(409, 'Conflict', c)
 
   def _send_resp(self, rtype, rsize, rbody=None, rmod=None, rrange=None, enc=False):
     resp = \
@@ -3839,12 +3842,16 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
         closed = True
         continue
       if req.method == 'OPTIONS':
+        req.body(1048576)
+        if req.body(1):
+          closed = True
+          self.request.settimeout(3)
         if not self._send_opt():
           closed = True
       elif req.method in ('GET', 'HEAD', 'PUT'):
         apath, rpath, osort = self._process_path(root, req.path)
         if apath is None:
-          if not self._send_err_f():
+          if not self._send_err_f(req.method == 'PUT'):
             closed = True
           continue
         rrange = req.header('Range')
@@ -3856,7 +3863,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
             rrange = rrange.split('-')
             rrange = (rrange[0].strip(), rrange[1].split(',')[0].strip())
           except:
-            if not self._send_err_rns():
+            if not self._send_err_rns(req.method == 'PUT'):
               closed = True
             continue
         if req.method != 'PUT':
@@ -3919,8 +3926,8 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                       closed = True
                     continue
                 if not kernel32.LockFileEx(h, DWORD(1), DWORD(0), *self.split_int(rrange[1] - rrange[0] if rrange else fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(rrange[0] if rrange else 0)), None))):
-                  self._send_err_c()
-                  closed = True
+                  if not self._send_err_c():
+                    closed = True
                   continue
               if req.header('If-None-Match') is None:
                 ms = req.header('If-Modified-Since')
@@ -3952,10 +3959,14 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 pass
         else:
           if not self.server.max_upload:
-            if not self._send_err_mna():
-              closed = True
+            closed = True
+            self._send_err_mna(True)
             continue
           if rpath.endswith('/'):
+            if req.body(1):
+              closed = True
+              self._send_err_ptl(True)
+              continue
             try:
               if os.path.isdir(apath):
                 os.utime(apath, (time.time(),) * 2)
@@ -3973,7 +3984,6 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 closed = True
           else:
             try:
-              rmlength = rrlength = self.server.max_upload
               with self.server._plock:
                 e = os.path.isfile(apath)
                 f = open(apath, ('r+b' if e else 'wb'))
@@ -3981,60 +3991,67 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 fs = os.stat(f.fileno())
                 if rrange:
                   try:
-                    if not rrange[0]:
-                      f.seek(-min(int(rrange[1]), fs.st_size), os.SEEK_END)
-                    else:
+                    if rrange[0]:
+                      rrlength = int(rrange[1]) + 1 - int(rrange[0]) if rrange[1] else self.server.max_upload - max(0, int(rrange[0]) - fs.st_size)
+                      if rrlength < 0 or rrlength + max(0, int(rrange[0]) - fs.st_size) > self.server.max_upload:
+                        closed = True
+                        self._send_err_ptl(True)
+                        continue
                       f.seek(int(rrange[0]), os.SEEK_SET)
-                      if rrange[1]:
-                        rrlength = int(rrange[1]) + 1 - int(rrange[0])
-                        if rrlength < 0:
-                          raise
+                    else:
+                      rrlength = self.server.max_upload
+                      f.seek(-min(int(rrange[1]), fs.st_size), os.SEEK_END)
                   except:
-                    self._send_err_rns()
                     closed = True
+                    self._send_err_rns(True)
                     continue
                 else:
-                  if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
-                    self._send_err_c()
+                  if int(req.header('Content-Length', 0)) > self.server.max_upload:
                     closed = True
+                    self._send_err_ptl(True)
+                    continue
+                  rrlength = self.server.max_upload
+                  if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(fs.st_size + self.server.max_upload), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
+                    closed = True
+                    self._send_err_c(True)
                     continue
                   f.seek(0, os.SEEK_SET)
                   f.truncate(0)
-                  kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None)))
+                  if not kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(fs.st_size + self.server.max_upload), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
+                    closed = True
+                    self._send_err_c(True)
+                    continue
+                print(rrlength, f.tell())
                 if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(rrlength), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(f.tell())), None))):
-                  self._send_err_c()
                   closed = True
+                  self._send_err_c(True)
                   continue
-              while rmlength >= 0:
-                b = req.body(1048576)
+              while rrlength > 0:
+                b = req.body(min(rrlength, 1048576))
                 if not b:
                   break
-                rmlength -= len(b)
-                if rrlength < 0:
-                  continue
                 rrlength -= len(b)
-                if rmlength < 0 or rrlength < 0:
-                  f.write(memoryview(b)[:min(rmlength, rrlength)])
-                else:
-                  f.write(b)
-              if rmlength < 0:
-                self._send_err_ptl()
+                f.write(b)
+              if req.body(1):
                 closed = True
-                continue
-              if not self._send_c(rpath, e):
+                self._send_err_ptl(True)
+              elif not self._send_c(rpath, e):
                 closed = True
             except FileNotFoundError:
-              self._send_err_nf()
               closed = True
+              self._send_err_nf(True)
             except:
-              self._send_err_f()
               closed = True
+              self._send_err_f(True)
             finally:
               try:
                 f.close()
               except:
                 pass
       else:
+        if req.body(1):
+          closed = True
+          self.request.settimeout(3)
         if not self._send_err_ni():
           closed = True
 
