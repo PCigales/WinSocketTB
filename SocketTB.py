@@ -1054,10 +1054,10 @@ class IDAltSocket(_BIDSocket):
         rem_time = int((end_time - time.monotonic()) * 1000)
 
   def _func_wrap(self, m, func, f, *args, timeout='', **kwargs):
+    if self.closed:
+      raise ClosedError()
     timeout, rt, ul = self.lock(timeout, m)
     try:
-      if self.closed:
-        raise ClosedError()
       end_time = None
       self._elock[m].acquire()
       while True:
@@ -1093,10 +1093,10 @@ class IDAltSocket(_BIDSocket):
     return None if rt is None else max(end_time - time.monotonic(), 0)
 
   def connect(self, *args, timeout='', **kwargs):
+    if self.closed:
+      raise ClosedError()
     timeout, rt, ul =  self.lock(timeout, 'c')
     try:
-      if self.closed:
-        raise ClosedError()
       rt = self._connect_pending(rt)
       if rt is True:
         raise AlreadyError()
@@ -1126,13 +1126,16 @@ class IDAltSocket(_BIDSocket):
       self.unlock(ul)
 
   def connect_ex(self, *args, timeout='', **kwargs):
+    if self.closed:
+      return 10038
     timeout, rt, ul =  self.lock(timeout, 'c')
     try:
-      if self.closed:
-        return 10038
       rt = self._connect_pending(rt)
       if rt is True:
         return 10037
+    finally:
+      self.unlock(ul)
+    try:
       self._elock['c'].acquire()
       try:
         r = socket.socket.connect_ex(self, *args, **kwargs)
@@ -2142,8 +2145,7 @@ class HTTPMessage:
         rem_time = end_time - time.monotonic()
         if rem_time <= 0:
           return None
-        if abs(message.gettimeout() - rem_time) > 0.005:
-          message.settimeout(rem_time)
+        message.settimeout(rem_time)
       message.sendall(msg)
       return len(msg)
     except:
@@ -2174,14 +2176,20 @@ class HTTPMessage:
     if max_time is False:
       max_time = None
     end_time = None if max_time is None else time.monotonic() + max_time
-    iss = isinstance(message, socket.socket)
     max_hlength = min(max_length, max_hlength)
     rem_length = max_hlength
     try:
-      if not iss:
-        msg = message[0] if isinstance(message, (tuple, list)) else message
+      if isinstance(message, (tuple, list)):
+        iss = isinstance(message[0], socket.socket)
+        msg = message[1 if iss else 0]
+        message = message[0]
       else:
-        msg = b''
+        iss = isinstance(message, socket.socket)
+        msg = b'' if iss else message
+    except:
+      return http_message
+    try:
+      if iss:
         try:
           mto = message.gettimeout()
           message.settimeout(max_time)
@@ -2219,10 +2227,10 @@ class HTTPMessage:
         return http_message.clear()
       if not iss:
         http_message.expect_close = True
-      if http_message.code in ('100', '101', '204', '304'):
+      if http_message.code in ('101', '204', '304'):
         http_message.body = b''
         return http_message
-      if not body:
+      if not body or http_message.code == '100':
         http_message.body = msg[body_pos:]
         return http_message
       rem_length += max_length - max_hlength
@@ -2427,14 +2435,20 @@ class HTTPStreamMessage(HTTPMessage):
     if max_time is False:
       max_time = None
     end_time = None if max_time is None else time.monotonic() + max_time
-    iss = isinstance(message, socket.socket)
     rem_length = max_hlength
+    try:
+      if isinstance(message, (tuple, list)):
+        iss = isinstance(message[0], socket.socket)
+        msg = message[1 if iss else 0]
+        message = message[0]
+      else:
+        iss = isinstance(message, socket.socket)
+        msg = b'' if iss else message
+    except:
+      return http_message
     bbuf = None
     try:
-      if not iss:
-        msg = message[0] if isinstance(message, (tuple, list)) else message
-      else:
-        msg = b''
+      if iss:
         try:
           mto = message.gettimeout()
           message.settimeout(max_time)
@@ -2470,9 +2484,13 @@ class HTTPStreamMessage(HTTPMessage):
         return http_message.clear()
       if not iss:
         http_message.expect_close = True
-      if http_message.code in ('100', '101', '204', '304'):
+      if http_message.code in ('101', '204', '304'):
         chunked = False
         body_len = 0
+      elif http_message.code == '100':
+        chunked = False
+        decompress = False
+        body_len = len(msg) - body_pos
       else:
         chunked = http_message.in_header('Transfer-Encoding', 'chunked')
         if chunked:
@@ -2797,25 +2815,6 @@ class _HTTPBaseRequest:
       raise TimeoutError()
     return rem_time
 
-  @staticmethod
-  def _send(conn, data, end_time):
-    if end_time is not None:
-      rem_time = end_time - time.monotonic()
-      if rem_time <= 0:
-        raise TimeoutError()
-      conn.settimeout(rem_time)
-    conn.sendall(data)
-
-  @staticmethod
-  def _send_hto(conn, data, end_time):
-    if end_time is None:
-      conn.sendall(data, timeout=None)
-    else:
-      rem_time = end_time - time.monotonic()
-      if rem_time <= 0:
-        raise TimeoutError()
-      conn.sendall(data, timeout=rem_time)
-
   def __new__(cls, url, method=None, headers=None, data=None, timeout=30, max_length=16777216, max_hlength=1048576, max_time=None, decompress=True, pconnection=None, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None):
     if url is None:
       return HTTPMessage()
@@ -2881,6 +2880,7 @@ class _HTTPBaseRequest:
       process_cookies = basic_auth is not None
     cook = pconnection[1]
     auth = False
+    mess = (lambda c, mt: HTTPStreamMessage(c, decompress=decompress, max_hlength=max_hlength, max_time=mt)) if max_length < 0 else (lambda c, mt: HTTPMessage(c, body=(method.upper() != 'HEAD'), decompress=decompress, decode=None, max_length=max_length, max_hlength=max_hlength, max_time=mt, exceeded=exceeded))
     while True:
       try:
         pconnection[2].append(url)
@@ -2897,6 +2897,7 @@ class _HTTPBaseRequest:
         path = cls.connect(url, url_p, headers, timeout, max_hlength if max_length < 0 else min(max_length, max_hlength), end_time, pconnection, ip)
         try:
           code = '100'
+          rem = None
           pconnection[0].settimeout(cls._rem_time(None, end_time))
           msg = cls.RequestPattern % (method, path, url_p.netloc, ''.join('%s: %s\r\n' % kv for kv in (headers if not ck else {**headers, 'Cookie': '; '.join(k + '=' + v[0] for k, v in ck.items())}).items()))
           if not data:
@@ -2907,75 +2908,75 @@ class _HTTPBaseRequest:
             conn = pconnection[0]
             conn.sendall(msg.encode('iso-8859-1'))
             if hexp:
-              rem_time = cls._rem_time(3 if timeout is None else min(3, timeout), end_time)
-              if max_length < 0:
-                resp = HTTPStreamMessage(conn, decompress=Fals, max_hlength=max_hlength, max_time=rem_time)
-              else:
-                resp = HTTPMessage(conn, body=(method.upper() != 'HEAD'), decompress=False, decode=None, max_length=max_length, max_hlength=max_hlength, max_time=rem_time)
+              resp = mess(conn, cls._rem_time(3 if timeout is None else min(3, timeout), end_time))
               conn.settimeout(cls._rem_time(None, end_time))
               code = resp.code
-              if code is None:
+              if code == '100':
+                rem = resp.body() if max_length < 0 else resp.body
+              if code is None and exceeded != [True]:
                 code = '100'
               if data_str is False and code == '100':
                 conn.sendall(data)
             if data_str is not False and code == '100':
-              send_all = cls._send_hto if getattr(conn.__class__, 'HAS_TIMEOUT', False) else cls._send
-              if data_str >= 0:
-                r = data_str
-                while r > 0:
-                  try:
-                    b = data.read(min(r, 1048576))
-                  except:
-                    b = b''
+              hto = getattr(conn.__class__, 'HAS_TIMEOUT', False)
+              r = data_str if data_str >= 0 else 1048576
+              while r > 0:
+                try:
+                  b = data.read(min(r, 1048576))
+                except:
+                  b = b''
+                if data_str >= 0:
                   if not b:
                     b = b'\x00' * min(r, 1048576)
-                  send_all(conn, b, end_time)
                   r -= len(b)
-              elif data_str == -1:
-                while True:
-                  try:
-                    b = data.read(1048576)
-                  except:
-                    b = b''
+                elif data_str == -1:
                   if not b:
                     break
-                  send_all(conn, b, end_time)
-              else:
+                elif data_str == -2:
+                  if not b:
+                    b = b''
+                    r = -1
+                  b = b'%x\r\n%b\r\n' % (len(b), b)
                 while True:
                   try:
-                    b = data.read(1048576) or b''
-                  except:
-                    b = b''
-                  send_all(conn, b'%x\r\n%b\r\n' % (len(b), b), end_time)
-                  if not b:
+                    if not rem:
+                      if hto:
+                        rem = conn.recv(1, timeout=0)
+                      else:
+                        conn.settimeout(0)
+                        rem = conn.recv(1)
+                      if not rem:
+                        raise
+                  except (BlockingIOError, TimeoutError):
                     break
-          rem_time = cls._rem_time(None, end_time)
+                  resp = mess((conn, rem), cls._rem_time(None, end_time))
+                  code = resp.code
+                  if code == '100':
+                    rem = resp.body() if max_length < 0 else resp.body
+                  else:
+                    rem = None
+                    break
+                if code != '100':
+                  break
+                if hto:
+                  conn.sendall(b, timeout=cls._rem_time(None, end_time))
+                else:
+                  conn.settimeout(cls._rem_time(None, end_time))
+                  conn.sendall(b)
         except TimeoutError:
           raise
         except:
-          if retried:
-            raise
-          retried = True
-          try:
-            pconnection[0].close()
-          except:
-            pass
-          pconnection[0] = None
-          pconnection[2].pop()
-          continue
+          code = None
         while code == '100':
-          rem_time = cls._rem_time(None, end_time)
-          if max_length < 0:
-            resp = HTTPStreamMessage(pconnection[0], decompress=decompress, max_hlength=max_hlength, max_time=rem_time)
-          else:
-            resp = HTTPMessage(pconnection[0], body=(method.upper() != 'HEAD'), decompress=decompress,decode=None, max_length=max_length, max_hlength=max_hlength, max_time=rem_time, exceeded=exceeded)
+          resp = mess((pconnection[0] if rem is None else (pconnection[0], rem)), cls._rem_time(None, end_time))
           code = resp.code
           if code == '100':
+            rem = resp.body() if max_length < 0 else resp.body
             redir += 1
             if redir > max_redir:
               raise
         if code is None:
-          rem_time = cls._rem_time(None, end_time)
+          cls._rem_time(None, end_time)
           if retried or exceeded == [True]:
             raise
           retried = True
@@ -3612,9 +3613,17 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
       '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True))
     if c:
+      end_time = time.monotonic() + 3
       self.request.settimeout(3)
-    s = self._send(resp, rbody)
-    return not c and s 
+      if self._send(resp, rbody):
+        while True:
+          rem_time = end_time - time.monotonic()
+          if rem_time <= 0 or not self.req.body(1048576, max_time=rem_time):
+            break
+      self.request.settimeout(None)
+      return False
+    else:
+      return self._send(resp, rbody)
   def _send_err_ni(self, c=False):
     return self._send_err(501, 'Not implemented', c)
   def _send_err_nf(self, c=False):
@@ -3841,6 +3850,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       if not req.method:
         closed = True
         continue
+      self.req = req
       if req.method == 'OPTIONS':
         req.body(1048576)
         if req.body(1):
@@ -3848,6 +3858,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
           self.request.settimeout(3)
         if not self._send_opt():
           closed = True
+        self.request.settimeout(None)
       elif req.method in ('GET', 'HEAD', 'PUT'):
         apath, rpath, osort = self._process_path(root, req.path)
         if apath is None:
