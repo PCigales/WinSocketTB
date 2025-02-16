@@ -175,6 +175,9 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   print(pcon)
   u = HTTPIUpload('http://localhost:9000/nul', data=b'0' * 8)
   u.start()
+  print(u.wait_finish(), u.error)
+  u = HTTPIUpload('http://localhost:9000/nul', data=b'0' * 8)
+  u.start()
   print(u.wait_finish())
   b = io.BytesIO()
   with HTTPIDownload('http://localhost:9000/test.py', b, max_workers=3, timeout=5, section_min=2, block_size=2) as d:

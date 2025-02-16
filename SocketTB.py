@@ -2564,17 +2564,8 @@ class HTTPStreamMessage(HTTPMessage):
         else:
           return b''
       def bbuf_write(data):
-        try:
-          bbuf.write(reduce(decompress, rce, data))
-        except:
-          if http_message.method is not None and iss and error415_handler is None:
-            try:
-              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
-            except:
-              pass
-          raise
-        else:
-          return len(data)
+        bbuf.write(reduce(decompress, rce, data))
+        return len(data)
       nonlocal body_len
       nonlocal end_time
       try:
@@ -3586,6 +3577,29 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
     except:
       return False
 
+  def _send_close(self, resp, rbody=None):
+    end_time = time.monotonic() + 3
+    self.request.settimeout(3)
+    if self._send(resp, rbody):
+      b = b'' if self.req else None
+      while True:
+        rem_time = end_time - time.monotonic()
+        if rem_time <= 0:
+          break
+        if b is None:
+          try:
+            self.request.settimeout(rem_time)
+            if not self.request.recv(1048576):
+              break
+          except:
+            break
+        else:
+          b = self.req.body(1048576, max_time=rem_time)
+          if b == b'':
+            break
+    self.request.settimeout(None)
+    return False
+
   def _send_opt(self, c=False):
     resp = \
       'HTTP/1.1 200 OK\r\n' \
@@ -3596,7 +3610,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Allow: OPTIONS, HEAD, GET%s\r\n' \
       '%s' \
       '\r\n' % ((', PUT' if self.server.max_upload else ''), ('Connection: close\r\n' if c else ''))
-    return self._send(resp)
+    return (self._send_close if c else self._send)(resp)
 
   def _send_cont(self):
     if self._send('HTTP/1.1 100 Continue\r\n\r\n'):
@@ -3630,33 +3644,11 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
       '%s' \
       '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True), ('Connection: close\r\n' if c else ''))
-    if c:
-      end_time = time.monotonic() + 3
-      self.request.settimeout(3)
-      if self._send(resp, rbody):
-        while True:
-          rem_time = end_time - time.monotonic()
-          if rem_time <= 0:
-            break
-          b = self.req.body(1048576, max_time=rem_time)
-          if b is None:
-            try:
-              rem_time = end_time - time.monotonic()
-              if rem_time <= 0:
-                break
-              self.request.settimeout(rem_time)
-              if not self.request.recv(1048576):
-                break
-            except:
-              break
-          if b == b'':
-            break
-      self.request.settimeout(None)
-      return False
-    else:
-      return self._send(resp, rbody)
+    return (self._send_close if c else self._send)(resp, rbody)
   def _send_err_br(self, c=False):
     return self._send_err(400, 'Bad request', c)
+  def _send_err_ef(self, c=False):
+    return self._send_err(417, 'Expectation failed', c)
   def _send_err_ni(self, c=False):
     return self._send_err(501, 'Not implemented', c)
   def _send_err_nf(self, c=False):
@@ -3767,7 +3759,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       '\r\n' % (loc, email.utils.formatdate(time.time(), usegmt=True))
     return self._send(resp)
 
-  def _send_c(self, loc, e=False):
+  def _send_c(self, loc, e=False, c=False):
     resp = \
       'HTTP/1.1 %s\r\n' \
       'Content-Length: 0\r\n' \
@@ -3775,8 +3767,9 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Date: %s\r\n' \
       'Server: SocketTB\r\n' \
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
-      '\r\n' % (('204 No Content' if e else '201 Created'), loc, email.utils.formatdate(time.time(), usegmt=True))
-    return self._send(resp)
+      '%s' \
+      '\r\n' % (('204 No Content' if e else '201 Created'), loc, email.utils.formatdate(time.time(), usegmt=True), ('Connection: close\r\n' if c else ''))
+    return (self._send_close if c else self._send)(resp)
 
   @classmethod
   def _process_path(cls, root, qpath):
@@ -3901,67 +3894,52 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
             self._send_err(*self.error, True)
           continue
         if not req or not req.method:
-          closed = True
-          self.request.settimeout(3)
-          self._send_err_br()
-          self.request.settimeout(None)
+          closed = not self._send_err_br(True)
           continue
         if req.expect_close:
           closed = True
       if req.method == 'OPTIONS':
         if e100:
-          return self._send_cont() if blen_dec <= 1048576 else self._send_err_ptl(None)
+          return self._send_cont()
         req.body(1048576)
         b = req.body(1)
         if b is None:
-          closed = True
-          self._send_err_uc(True)
-        if b != b'':
-          closed = True
-          self.request.settimeout(3)
-        if not self._send_opt(closed):
-          closed = True
-        self.request.settimeout(None)
+          closed = not self._send_err_uc(True)
+          continue
+        closed |= not self._send_opt(b != b'')
       elif req.method in {'GET', 'HEAD', 'PUT'}:
         isp = req.method == 'PUT'
         if not isp:
           if e100:
-            if blen_dec != 0:
-              return self._send_err_ptl(None)
+            return self._send_err_ef(None)
           elif req.body(1) != b'':
-            closed = True
-            self._send_err_ptl(True)
+            closed = not self._send_err_ptl(True)
             continue
         apath, rpath, osort = self._process_path(root, req.path)
         if apath is None:
           if e100:
             return self._send_err_f(None)
-          if not self._send_err_f(isp):
-            closed = True
+          closed |= not self._send_err_f(isp)
           continue
         rrange = req.header('Range')
         if rrange:
           try:
             unit, rrange = rrange.rpartition('=')[::2]
-            if unit and unit.lower() != 'bytes':
+            if unit.lower() != 'bytes' or ',' in rrange:
               raise
             rrange = rrange.split('-')
             rrange = (rrange[0].strip(), rrange[1].strip())
           except:
             if e100:
               return self._send_err_rns(None)
-            if not self._send_err_rns(isp):
-              closed = True
+            closed |= not self._send_err_rns(isp)
             continue
         if not isp:
           f = None
           try:
             if os.path.isdir(apath):
               if not rpath.endswith('/'):
-                if e100:
-                  return self._send_cont()
-                if not self._send_mp(urllib.parse.quote(rpath + '/')):
-                  closed = True
+                closed |= not self._send_mp(urllib.parse.quote(rpath + '/'))
                 continue
               for ind in ('index.htm', 'index.html'):
                 try:
@@ -3975,13 +3953,8 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 enc = self._set_enc(req.header('Accept-Encoding'), 'text/html', bool(rrange))
                 tenc = self._set_enc(req.header('TE'), 'application/x-compressed' if enc else 'text/html')
                 if enc is None or tenc is None:
-                  if e100:
-                    return self._send_err_na(None)
-                  if not self._send_err_na():
-                    closed = True
+                  closed |= not self._send_err_na()
                   continue
-                if e100:
-                  return self._send_cont()
                 rbody = self._html_from_dir(apath, rpath, osort, bool(self.server.max_upload))
                 if rrange:
                   try:
@@ -3989,26 +3962,19 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                     if rrange[0] < 0 or rrange[0] >= rrange[1]:
                       raise
                   except:
-                    if not self._send_err_rns():
-                      closed = True
+                    closed |= not self._send_err_rns()
                     continue
                 elif enc and not tenc:
                   rbody = b''.join((enc[1].compress(rbody), enc[1].flush()))
-                if not (self._send_resp_chnk('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc, tenc) if tenc else self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc)):
-                  closed = True
+                closed |= not (self._send_resp_chnk('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc, tenc) if tenc else self._send_resp('text/html; charset=utf-8', len(rbody), (rbody if req.method == 'GET' else None), None, rrange, enc))
                 continue
             if os.path.isfile(apath):
               btype = self.__class__._mimetypes.guess_type(apath, strict=False)[0] or 'application/octet-stream'
               enc = self._set_enc(req.header('Accept-Encoding'), btype, bool(rrange))
               tenc = self._set_enc(req.header('TE'), 'application/x-compressed' if enc else btype)
               if enc is None or tenc is None:
-                if e100:
-                  return self._send_err_na(None)
-                if not self._send_err_na():
-                  closed = True
+                closed |= not self._send_err_na()
                 continue
-              if e100:
-                return self._send_cont()
               with self.server._plock:
                 f = open(apath, 'rb')
                 h = HANDLE(get_osfhandle(f.fileno()))
@@ -4019,12 +3985,10 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                     if rrange[0] < 0 or rrange[0] >= rrange[1]:
                       raise
                   except:
-                    if not self._send_err_rns():
-                      closed = True
+                    closed |= not self._send_err_rns()
                     continue
                 if not kernel32.LockFileEx(h, DWORD(1), DWORD(0), *self.split_int(rrange[1] - rrange[0] if rrange else fs.st_size), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(rrange[0] if rrange else 0)), None))):
-                  if not self._send_err_c():
-                    closed = True
+                  closed |= not self._send_err_c()
                   continue
               if req.header('If-None-Match') is None:
                 ms = req.header('If-Modified-Since')
@@ -4035,23 +3999,15 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                       raise
                     ms = (*ms[:8], 0, 0)
                     if int(fs.st_mtime) <= email.utils.mktime_tz(ms):
-                      if not self._send_nm():
-                        closed = True
+                      closed |= not self._send_nm()
                       continue
                   except:
                     pass
-              if not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange, enc, tenc) if enc or tenc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange)):
-                closed = True
+              closed |= not (self._send_resp_chnk(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange, enc, tenc) if enc or tenc else self._send_resp(btype, fs.st_size, (f if req.method == 'GET' else None), fs.st_mtime, rrange))
             else:
-              if e100:
-                return self._send_err_nf(None)
-              if not self._send_err_nf():
-                closed = True
+              closed |= not self._send_err_nf()
           except:
-            if e100:
-              return self._send_err_f(None)
-            if not self._send_err_f():
-              closed = True
+            closed |= not self._send_err_f()
           finally:
             if f:
               try:
@@ -4062,31 +4018,25 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
           if not self.server.max_upload:
             if e100:
               return self._send_err_mna(None)
-            closed = True
-            self._send_err_mna(True)
+            closed = not self._send_err_mna(True)
             continue
           if rpath.endswith('/'):
             if e100:
               return self._send_cont() if blen_dec <= 0 else self._send_err_ptl(None)
             if req.body(1) != b'':
-              closed = True
-              self._send_err_ptl(True)
+              closed = not self._send_err_ptl(True)
               continue
             try:
               if os.path.isdir(apath):
                 os.utime(apath, (time.time(),) * 2)
-                if not self._send_c(rpath, True):
-                  closed = True
+                closed |= not self._send_c(rpath, True)
               else:
                 os.mkdir(apath)
-                if not self._send_c(rpath):
-                  closed = True
+                closed |= not self._send_c(rpath)
             except FileNotFoundError:
-              if not self._send_err_nf():
-                closed = True
+              closed |= not self._send_err_nf()
             except:
-              if not self._send_err_f():
-                closed = True
+              closed |= not self._send_err_f()
           else:
             f = None
             try:
@@ -4109,8 +4059,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                       if rrlength < 0 or rrlength + max(0, int(rrange[0]) - size) > self.server.max_upload:
                         if e100:
                           return self._send_err_ptl(None)
-                        closed = True
-                        self._send_err_ptl(True)
+                        closed = not self._send_err_ptl(True)
                         continue
                       if e100:
                         return self._send_cont()
@@ -4123,30 +4072,25 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                   except:
                     if e100:
                       return self._send_err_rns(None)
-                    closed = True
-                    self._send_err_rns(True)
+                    closed = not self._send_err_rns(True)
                     continue
                 else:
                   if e100:
                     return self._send_cont() if blen_dec <= self.server.max_upload else self._send_err_ptl(None)
                   if int(req.header('Content-Length', 0)) > self.server.max_upload:
-                    closed = True
-                    self._send_err_ptl(True)
+                    closed = not self._send_err_ptl(True)
                     continue
                   rrlength = self.server.max_upload
                   if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(size + self.server.max_upload), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
-                    closed = True
-                    self._send_err_c(True)
+                    closed = not self._send_err_c(True)
                     continue
                   f.seek(0, os.SEEK_SET)
                   f.truncate(0)
                   if not kernel32.UnlockFileEx(h, DWORD(0), *self.split_int(size + self.server.max_upload), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
-                    closed = True
-                    self._send_err_c(True)
+                    closed = not self._send_err_c(True)
                     continue
                 if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(rrlength), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(f.tell())), None))):
-                  closed = True
-                  self._send_err_c(True)
+                  closed = not self._send_err_c(True)
                   continue
               finally:
                 if not e100:
@@ -4154,27 +4098,20 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
               while rrlength > 0:
                 b = req.body(min(rrlength, 1048576))
                 if b is None:
-                  closed = True
-                  self._send_err_uc(True)
+                  closed = not self._send_err_uc(True)
                 if not b:
                   break
                 rrlength -= len(b)
                 f.write(b)
-              if req.body(1) != b'':
-                closed = True
-                self._send_err_uc(True)
-              elif not self._send_c(rpath, e):
-                closed = True
+              closed |= not self._send_c(rpath, e, req.body(1) != b'')
             except FileNotFoundError:
               if e100:
                 return self._send_err_nf(None)
-              closed = True
-              self._send_err_nf(True)
+              closed = not self._send_err_nf(True)
             except:
               if e100:
                 return self._send_err_f(None)
-              closed = True
-              self._send_err_f(True)
+              closed = not self._send_err_f(True)
             finally:
               if f:
                 try:
@@ -4184,11 +4121,11 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       else:
         if e100:
           return self._send_err_ni(None)
-        if not self._send_err_ni(bool(req.body(1) != b'')):
-          closed = True
+        closed |= not self._send_err_ni(bool(req.body(1) != b''))
     if e100:
       self.error = True
       return False
+
 
 class HTTPIServer(TCPIServer):
 
@@ -5772,13 +5709,15 @@ class HTTPIUpload(_MimeTypes):
           self.bbuf.write(self.comp.flush())
       return self.bbuf.read(size)
 
-  def __new__(cls, url, data=None, headers=None, file_range=None, file_compress=None, timeout=30, max_hlength=1048576, retry=None, max_redir=5, unsecuring_redir=False, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
+  def __new__(cls, url, data=None, headers=None, file_range=None, file_compress=None, timeout=30, max_hlength=1048576, retry=None, max_redir=5, unsecuring_redir=False, expect_100=True, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
     self.url = url
     hitems = tuple(((k.strip(), v) for k, v in headers.items()) if isinstance(headers, dict) else ((k.strip(), v.strip()) for k, v in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e)))
     try:
-      self.headers = {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te', 'content-length', 'content-encoding', 'transfer-encoding', 'range'}} if isinstance(data, (str, int)) else {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te'}}
+      self.headers = {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te', 'content-length', 'content-encoding', 'transfer-encoding', 'range', 'expect'}} if isinstance(data, (str, int)) else {k: v for k, v in hitems if k.lower() not in {'host', 'accept-encoding', 'te', 'expect'}}
+      if expect_100:
+        self.headers['Expect'] = '100-continue'
     except:
       return None
     self._req = lambda r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, 'PUT', headers=self.headers, data=self._data, timeout=timeout, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
