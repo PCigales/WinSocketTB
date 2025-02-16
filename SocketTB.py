@@ -3925,7 +3925,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
         if rrange:
           try:
             unit, rrange = rrange.rpartition('=')[::2]
-            if unit.lower() != 'bytes' or ',' in rrange:
+            if (unit and unit.lower() != 'bytes') or ',' in rrange:
               raise
             rrange = rrange.split('-')
             rrange = (rrange[0].strip(), rrange[1].strip())
