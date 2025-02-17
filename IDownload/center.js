@@ -12,7 +12,7 @@ async function set_progress(sdid) {
   const download = document.getElementById("download_" + sdid);
   download.className = progress.status.split(" ")[0];
   download.getElementsByClassName("size")[1].innerText = (progress.status == "completed" || progress.size) ? num_form.format(progress.size) : "";
-  download.getElementsByClassName("status")[1].innerText = `${progress.status}${(progress.status = "aborted" && (typeof progress.error) == "string") ? ` (${progress.error})` : ""}`;
+  download.getElementsByClassName("status")[1].innerText = `${progress.status}${(progress.status == "aborted" && (typeof progress.error) == "string") ? ` (${progress.error})` : ""}`;
   download.getElementsByClassName("downloaded")[1].innerText = num_form.format(progress.downloaded);
   download.getElementsByClassName("bar")[0].innerHTML = Object.hasOwn(progress, "sections") ? progress.sections.reduce(function (a, c) {const b = Math.round(c.size * 1000000 / progress.size); return `${a}<progress max="${b}" value="${Math.round(c.downloaded * 1000000 / progress.size)}" style="flex: ${b} 1 ${b}px"></progress>`;}, "") : ((progress.status != "aborted" && progress.size) ? `<progress class="no" max="1000000" value="${Math.round(progress.downloaded * 1000000 / progress.size)}" style="flex: 1 1 1px"></progress>` : "");
   download.getElementsByClassName("percent")[0].innerText = (progress.status == "completed" || progress.size) ? progress.percent.toString() : "";
