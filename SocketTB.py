@@ -4055,7 +4055,12 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                 if rrange:
                   try:
                     if rrange[0]:
-                      rrlength = int(rrange[1]) + 1 - int(rrange[0]) if rrange[1] else self.server.max_upload - max(0, int(rrange[0]) - size)
+                      if rrange[1]:
+                        rrlength = int(rrange[1]) + 1 - int(rrange[0])
+                        rrlengthm = False
+                      else:
+                        rrlength = self.server.max_upload - max(0, int(rrange[0]) - size)
+                        rrlengthm = True
                       if rrlength < 0 or rrlength + max(0, int(rrange[0]) - size) > self.server.max_upload:
                         if e100:
                           return self._send_err_ptl(None)
@@ -4068,6 +4073,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                       if e100:
                         return self._send_cont()
                       rrlength = self.server.max_upload
+                      rrlengthm = True
                       f.seek(-min(int(rrange[1]), size), os.SEEK_END)
                   except:
                     if e100:
@@ -4081,6 +4087,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                     closed = not self._send_err_ptl(True)
                     continue
                   rrlength = self.server.max_upload
+                  rrlengthm = True
                   if not kernel32.LockFileEx(h, DWORD(3), DWORD(0), *self.split_int(size + self.server.max_upload), byref(OVERLAPPED(0, 0, OVERLAPPED_O(*self.split_int(0)), None))):
                     closed = not self._send_err_c(True)
                     continue
@@ -4103,7 +4110,11 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
                   break
                 rrlength -= len(b)
                 f.write(b)
-              closed |= not self._send_c(rpath, e, req.body(1) != b'')
+              b = req.body(1)
+              if b and rrlengthm:
+                closed = not self._send_err_ptl(True)
+              else:
+                closed |= not self._send_c(rpath, e, b != b'')
             except FileNotFoundError:
               if e100:
                 return self._send_err_nf(None)
@@ -5013,9 +5024,9 @@ class HTTPIDownload(_MimeTypes):
         self._workers = [[sec['start'] + sec['downloaded'], sec['size'] - sec['downloaded'], True] for sec in resume.get('sections', ()) if sec['status'] == 'aborted']
         if not self._workers:
           return None
-        self._progress = {'status': 'waiting', 'size': resume['size'], 'downloaded': resume['downloaded'], 'percent': resume['percent'], 'workers': [*([sec | {'status': 'waiting'}] for sec in resume['sections'] if sec['status'] == 'aborted'), *filter(None, ([sec.copy() for sec in resume['sections'] if sec['status'] == 'completed'],))], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
+        self._progress = {'status': 'waiting', 'size': resume['size'], 'downloaded': resume['downloaded'], 'percent': resume['percent'], 'error': False, 'workers': [*([sec | {'status': 'waiting'}] for sec in resume['sections'] if sec['status'] == 'aborted'), *filter(None, ([sec.copy() for sec in resume['sections'] if sec['status'] == 'completed'],))], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
       else:
-        self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
+        self._progress = {'status': 'waiting', 'size': 0, 'downloaded': 0, 'percent': 0, 'error': False, 'workers': [], 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False, 'workers': False}}
       self.headers = {k: v for k, v in (((k_.strip(), v_) for k_, v_ in headers.items()) if isinstance(headers, dict) else ((k_.strip(), v_.strip()) for k_, v_ in (e.split(':', 1) for e in (headers or '').splitlines() if ':' in e))) if k.lower() not in ('host', 'accept-encoding', 'te')}
     except:
       return None
@@ -5086,7 +5097,6 @@ class HTTPIDownload(_MimeTypes):
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
-    self.error = None
     return self
 
   @property
@@ -5128,7 +5138,9 @@ class HTTPIDownload(_MimeTypes):
       rep = self._req(h)
       if rep.code not in ('200', '206'):
         if work[2] is True and  w_ == 0:
-          self.error = rep.code
+          if self._req is not None:
+            with self._progress['eventing']['condition']:
+              self._progress['error'] = rep.code or True
         return False
       if rep.header('Content-Encoding') or (rep.header('Accept-Ranges', 'none').lower() != 'bytes' and rep.header('Content-Range', '').split(' ')[0].strip().lower() != 'bytes') or int(rep.header('Content-Range', '').rpartition(' ')[2].split('/', 1)[0].split('-', 1)[0]) != start:
         return False
@@ -5228,6 +5240,8 @@ class HTTPIDownload(_MimeTypes):
             self._progress['eventing']['condition'].notify_all()
       sem.release()
     if err:
+      with self._progress['eventing']['condition']:
+        self._progress['error'] = self._progress['error'] or True
       self.stop(False)
 
   def _read(self, w, rep):
@@ -5306,11 +5320,14 @@ class HTTPIDownload(_MimeTypes):
         with self._lock:
           if self._req is None:
             return False
+        if b is None:
+          raise
         if not b:
           with self._progress['eventing']['condition']:
             if not self._progress['size']:
               self._progress['size'] = self._progress['downloaded']
               self._progress['percent'] = 100
+              self._progress['eventing']['progression'] = True
               self._progress['eventing']['condition'].notify_all()
           break
         with self._flock:
@@ -5319,7 +5336,7 @@ class HTTPIDownload(_MimeTypes):
             if self._progress['size']:
               self._progress['downloaded'] += len(b)
               p = self._progress['percent']
-              self._progress['percent'] = math.floor(self._progress['downloaded'] / self._progress['size'] * 100)
+              self._progress['percent'] = min(math.floor(self._progress['downloaded'] / self._progress['size'] * 100), 100)
               if p != self._progress['percent']:
                 self._progress['eventing']['progression'] = True
                 self._progress['eventing']['condition'].notify_all()
@@ -5330,7 +5347,9 @@ class HTTPIDownload(_MimeTypes):
                 self._progress['eventing']['progression'] = True
                 self._progress['eventing']['condition'].notify_all()
     except:
-      return
+      if self._req is not None:
+        with self._progress['eventing']['condition']:
+          self._progress['error'] = self._progress['error'] or True
     finally:
       self.stop(False)
 
@@ -5390,11 +5409,16 @@ class HTTPIDownload(_MimeTypes):
           h['Accept-Encoding'] = h['TE']
           rep = self._req(h)
           if rep.code != '200':
-            self.error = rep.code
+            if self._req is not None:
+              with self._progress['eventing']['condition']:
+                self._progress['error'] = rep.code or True
             raise
           size = 0 if rep.header('Content-Encoding') else int(rep.header('Content-Length', 0))
           section = False
       except:
+        if self._req is not None:
+          with self._progress['eventing']['condition']:
+            self._progress['error'] = self._progress['error'] or True
         self.stop(False)
         return
       with self._progress['eventing']['condition']:
@@ -5434,6 +5458,9 @@ class HTTPIDownload(_MimeTypes):
           for w in range((0 if rep is None else 1), self._maxworks):
             if not self._nsection():
               if w == 0:
+                if self._req is not None:
+                  with self._progress['eventing']['condition']:
+                    self._progress['error'] = self._progress['error'] or True
                 self.stop(False)
               break
     else:
@@ -5452,6 +5479,8 @@ class HTTPIDownload(_MimeTypes):
         if self._file_fz is not None:
           th.start()
     if self._file_fz is None:
+      with self._progress['eventing']['condition']:
+        self._progress['error'] = self._progress['error'] or True
       self.stop(False)
       return
 
@@ -5487,12 +5516,10 @@ class HTTPIDownload(_MimeTypes):
             if sec['status'] != 'completed':
               sec['status'] = 'aborted'
         self._progress['eventing']['workers'] = True
-        if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] == self._progress['downloaded']:
+        if (self._progress['size'] or self._progress['percent'] == 100) and self._progress['size'] <= self._progress['downloaded']:
           self._progress['status'] = 'completed'
         else:
           self._progress['status'] = 'aborted'
-          if self._threads and not self.error:
-            self.error = 'error'
         self._progress['eventing']['status'] = True
         self._progress['eventing']['condition'].notify_all()
     if hasattr(self, '_condition'):
@@ -5515,7 +5542,7 @@ class HTTPIDownload(_MimeTypes):
         return ''.join('█' * (b := math.floor(sec['downloaded'] * (bl := (-cb + (cb := round(length * (cs := cs + sec['size']) / self.progress['size'])))) / sec['size'])) + '░' * (bl - b) for sec in self.progress['sections'])
         pass
       elif self._progress['size']:
-        return '█' * (b := math.floor(self._progress['downloaded'] * length / self._progress['size'])) + '░' * (length - b)
+        return '█' * (b := min(math.floor(self._progress['downloaded'] * length / self._progress['size']), length)) + '░' * (length - b)
       else:
         return ''
 
@@ -5529,7 +5556,7 @@ class HTTPIDownload(_MimeTypes):
     with self._progress['eventing']['condition']:
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression']), timeout)
       self._progress['eventing']['progression'] = False
-      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], ',d')
+      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], 'n')
 
   def wait_workers(self, timeout=None):
     with self._progress['eventing']['condition']:
@@ -5548,7 +5575,7 @@ class HTTPIDownload(_MimeTypes):
       self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression'] or self._progress['eventing']['workers']), timeout)
       self._progress['eventing']['progression'] = False
       self._progress['eventing']['workers'] = False
-      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent']) if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], ',d')
+      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent']) if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], 'n')
 
   def __enter__(self):
     self.start()
@@ -5709,6 +5736,31 @@ class HTTPIUpload(_MimeTypes):
           self.bbuf.write(self.comp.flush())
       return self.bbuf.read(size)
 
+  class _Reader:
+    def __init__(self, data, progress):
+      self._data = data
+      self._progress = progress
+      self._read = 0
+    def read(self, size):
+      with self._progress['eventing']['condition']:
+        if self._progress['size']:
+          self._progress['uploaded'] = self._read
+          p = self._progress['percent']
+          self._progress['percent'] = min(math.floor(self._progress['uploaded'] / self._progress['size'] * 100), 100)
+          if p != self._progress['percent']:
+            self._progress['eventing']['progression'] = True
+            self._progress['eventing']['condition'].notify_all()
+        else:
+          u = self._progress['uploaded']
+          self._progress['uploaded'] = self._read
+          if u // 1048576 != self._progress['uploaded'] // 1048576:
+            self._progress['eventing']['progression'] = True
+            self._progress['eventing']['condition'].notify_all()
+      b = self._data.read(size)
+      if b:
+        self._read += len(b)
+      return b
+
   def __new__(cls, url, data=None, headers=None, file_range=None, file_compress=None, timeout=30, max_hlength=1048576, retry=None, max_redir=5, unsecuring_redir=False, expect_100=True, ip='', basic_auth=None, process_cookies=None, proxy=None, isocket_generator=None):
     self = object.__new__(cls)
     self.isocketgen = isocket_generator if isinstance(isocket_generator, ISocketGenerator) else ISocketGenerator()
@@ -5723,7 +5775,7 @@ class HTTPIUpload(_MimeTypes):
     self._req = lambda r=HTTPRequestConstructor(self.isocketgen, proxy): r(url, 'PUT', headers=self.headers, data=self._data, timeout=timeout, max_hlength=max_hlength, decompress=False, retry=retry, max_redir=max_redir, unsecuring_redir=unsecuring_redir, ip=ip, basic_auth=basic_auth, process_cookies=process_cookies)
     self._lock = threading.Lock()
     self._thread = None
-    self._finish = [threading.Event(), 'waiting']
+    self._progress = {'status': 'waiting', 'size': 0, 'uploaded': 0, 'percent': 0, 'error': False, 'eventing': {'condition': threading.Condition(), 'status': False, 'progression': False}}
     self._file = None
     if url.endswith('/'):
       self._data = None
@@ -5757,8 +5809,20 @@ class HTTPIUpload(_MimeTypes):
           return None
       except:
         return None
-      self._data = data
+      try:
+        if data.seekable():
+          s = data.tell()
+          data.seek(0, os.SEEK_END)
+          self._progress['size'] = data.tell() - s
+          data.seek(s, os.SEEK_SET)
+      except:
+        pass
+      self._data = cls._Reader(data, self._progress)
     else:
+      try:
+        self._progress['size'] = len(data)
+      except:
+        return None
       self._data = data
     if isinstance(data, (str, int)):
       fsize = os.stat(self._file.fileno()).st_size
@@ -5797,28 +5861,42 @@ class HTTPIUpload(_MimeTypes):
           file_compress = None
       if file_compress is None:
         self.headers['Content-Length'] = rrange[1] - rrange[0]
-        self._data = self._file
+        self._data = cls._Reader(self._file, self._progress)
       else:
-        self._data = cls._Compressor(self._file, rrange[1] - rrange[0], comp)
-    self.error = None
+        self._data = cls._Compressor(cls._Reader(self._file, self._progress), rrange[1] - rrange[0], comp)
+      self._progress['size'] = rrange[1] - rrange[0]
     return self
+
+  @property
+  def progress(self):
+    with self._progress['eventing']['condition']:
+      return {'status': self._progress['status'], 'size': self._progress['size']} if self._progress['status'] == 'waiting' else {k: v for k, v in self._progress.items() if k != 'eventing'}
 
   def _start(self):
     rep = None
     try:
-      req = self._req
-      if req is None:
-        return
       rep = self._req()
     except:
       pass
     finally:
-      if rep and rep.code.startswith('2'):
-        self._finish[1] = 'completed'
-        self.error = False
-      else:
-        self._finish[1] = 'aborted'
-        self.error = (rep and rep.code) or 'error'
+      with self._progress['eventing']['condition']:
+        r = isinstance(self._data, self.__class__._Reader)
+        if r:
+          self._progress['uploaded'] = self._data._read
+        if rep and rep.code and rep.code.startswith('2'):
+          self._progress['status'] = 'completed'
+          if r:
+            self._progress['size'] = self._progress['uploaded']
+          else:
+            self._progress['uploaded'] = self._progress['size']
+          self._progress['percent'] = 100
+        else:
+          self._progress['status'] = 'aborted'
+          if self._req is not None:
+            self._progress['error'] = (rep and rep.code) or True
+        self._progress['eventing']['status'] = True
+        self._progress['eventing']['progression'] = True
+        self._progress['eventing']['condition'].notify_all()
       self.stop(False)
 
   def start(self):
@@ -5826,7 +5904,11 @@ class HTTPIUpload(_MimeTypes):
       if self._req is None:
         return
       self._thread = threading.Thread(target=self._start)
-      self._finish[1] = 'working'
+      with self._progress['eventing']['condition']:
+        self._progress['status'] = 'working'
+        self._progress['eventing']['status'] = True
+        self._progress['eventing']['progression'] = True
+        self._progress['eventing']['condition'].notify_all()
       self._thread.start()
 
   def stop(self, block_on_close=True):
@@ -5835,9 +5917,11 @@ class HTTPIUpload(_MimeTypes):
         return
       self._req = None
       self.isocketgen.close()
-      self._finish[0].set()
       if self._thread is None:
-        self._finish[1] = 'aborted'
+        with self._progress['eventing']['condition']:
+          self._progress['status'] = 'aborted'
+          self._progress['eventing']['status'] = True
+          self._progress['eventing']['condition'].notify_all()
     if self._file:
       try:
         self._file.close()
@@ -5846,14 +5930,42 @@ class HTTPIUpload(_MimeTypes):
     if block_on_close and self._thread is not None:
       self._thread.join()
 
+  def progress_bar(self, length=100):
+    with self._progress['eventing']['condition']:
+      if self._progress['status'] == 'completed':
+        return '█' * length
+      elif self._progress['size']:
+        return '█' * (b := min(math.floor(self._progress['uploaded'] * length / self._progress['size']), length)) + '░' * (length - b)
+      else:
+        return ''
+
   def wait_finish(self, timeout=None):
-    if self._finish[1] == 'waiting':
-      return 'waiting'
-    self._finish[0].wait(timeout)
-    return self._finish[1]
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'}), timeout)
+      self._progress['eventing']['status'] = False
+      return self._progress['status']
+
+  def wait_progression(self, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression']), timeout)
+      self._progress['eventing']['progression'] = False
+      return '%d%%' % self._progress['percent'] if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['downloaded'], 'n')
+
+  def wait_progress_bar(self, length=100, timeout=None):
+    with self._progress['eventing']['condition']:
+      self._progress['eventing']['condition'].wait_for((lambda : self._progress['status'] in {'waiting', 'completed', 'aborted'} or self._progress['eventing']['progression']), timeout)
+      self._progress['eventing']['progression'] = False
+      return '%s %3d%%' % (self.progress_bar(length), self._progress['percent']) if self._progress['size'] or self._progress['status'] == 'completed' else '%s o' % format(self._progress['uploaded'], 'n')
+
+  def __enter__(self):
+    self.start()
+    return self
+
+  def __exit__(self, et, ev, tb):
+    self.stop()
 
   def __repr__(self):
-    return '\r\n'.join(('<HTTPIUpload at %#x>\r\n----------' % id(self), 'Url: ' + self.url, 'Status: ' + self._finish[1]))
+    return '\r\n'.join(('<HTTPIUpload at %#x>\r\n----------' % id(self), 'Url: ' + self.url, 'Status: ' + self._progress['status']))
 
 
 class NTPClient:
