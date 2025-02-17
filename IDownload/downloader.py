@@ -115,8 +115,8 @@ if started and st != 'completed':
     DownloadDS.progress = progress
   print('progression: %s' % download.wait_progress_bar(100))
 suspended = download.suspended
-print('status:', st)
-DownloadDS.progress = download.progress if st != 'aborted' or suspended else {'status': 'aborted', 'size': download.progress['size'], 'downloaded': 0, 'percent': 0}
+print('status: %s%s' % (st, ((' (%s)' % e) if st == 'aborted' and isinstance((e := download.progress['error']), str) else '')))
+DownloadDS.progress = download.progress if st != 'aborted' or suspended else {'status': 'aborted', 'size': download.progress['size'], 'downloaded': 0, 'percent': 0, 'error': download.progress['error']}
 if st == 'completed':
   while True:
     try:
