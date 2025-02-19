@@ -33,7 +33,7 @@ try:
   file = message['file']
   dfile = file + '.idownload'
   progress = message.get('progress')
-  download = HTTPIDownload(url, dfile, headers=dict(map(dict.values, message['headers'])), max_workers=message['maxsecs'], section_min=(message['secmin'] * 1048576), file_preallocate=True, file_sparse=message['sparse'], resume=progress)
+  download = HTTPIDownload(url, dfile, headers={k: v for k, v in map(dict.values, message['headers']) if k.lower() != 'range'}, max_workers=message['maxsecs'], section_min=(message['secmin'] * 1048576), file_preallocate=True, file_sparse=message['sparse'], resume=progress)
   if not download:
     raise
   download.start()
