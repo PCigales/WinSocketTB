@@ -5372,8 +5372,7 @@ class HTTPIDownload(_MimeTypes):
             if size:
               self._file.write(memoryview(b)[:size])
             self._file.seek(0, os.SEEK_SET)
-        except Exception as e:
-          print(e)
+        except:
           return False
     return True
 
