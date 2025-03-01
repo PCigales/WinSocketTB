@@ -5361,7 +5361,7 @@ class HTTPIDownload(_MimeTypes):
         except:
           h = None
         try:
-          if h is not None and not kernel32.SetFilePointerEx(h, size, None, 0) or not kernel32.SetEndOfFile(h) or not kernel32.SetFilePointerEx(h, 0, None, 0):
+          if h is not None and not kernel32.SetFilePointerEx(h, LARGE_INTEGER(size), None, DWORD(0)) or not kernel32.SetEndOfFile(h) or not kernel32.SetFilePointerEx(h, LARGE_INTEGER(0), None, DWORD(0)):
             return False
           if self._file_fz == 1:
             self._file.seek(0, os.SEEK_SET)
@@ -5372,7 +5372,8 @@ class HTTPIDownload(_MimeTypes):
             if size:
               self._file.write(memoryview(b)[:size])
             self._file.seek(0, os.SEEK_SET)
-        except:
+        except Exception as e:
+          print(e)
           return False
     return True
 
