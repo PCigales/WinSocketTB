@@ -62,7 +62,10 @@ class DownloadsWSRequestHandler(WebSocketRequestHandler):
 
   def connected_callback(self):
     super().connected_callback()
-    if self.channel.path == 'report' and self.channel.datastore.downloaders.setdefault(self.headers['X-Request-Id'], self) != self:
+    try:
+      if self.request.getsockname()[0] != self.request.getpeername()[0] or (self.channel.path == 'report' and self.channel.datastore.downloaders.setdefault(self.headers['X-Request-Id'], self) != self):
+        raise
+    except:
       self.closed = True
       return
 
@@ -78,7 +81,7 @@ class DownloadsWSRequestHandler(WebSocketRequestHandler):
 
 
 try:
-  DownloadsWSServer = WebSocketIDAltServer(('localhost', int(sys.argv[1])), DownloadsWSRequestHandler)
+  DownloadsWSServer = WebSocketIDAltServer(int(sys.argv[1]), DownloadsWSRequestHandler)
   DownloadsWSServer.start()
   sys.stderr.buffer.write(b'0')
   sys.stderr.buffer.flush()
