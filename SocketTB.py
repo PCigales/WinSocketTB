@@ -2228,7 +2228,7 @@ class HTTPMessage:
       if not iss:
         http_message.expect_close = True
       if http_message.code in ('101', '204', '304'):
-        http_message.body = b''
+        http_message.body = '' if decode else b''
         return http_message
       if not body or http_message.code == '100':
         http_message.body = msg[body_pos:]
@@ -2393,30 +2393,29 @@ class HTTPMessage:
           buff = buff + bloc
         if len(buff) - chunk_pos > 2:
           cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
-      if http_message.body:
-        try:
-          if hce:
-            for ce in hce[::-1]:
-              if ce == 'deflate':
-                try:
-                  http_message.body = zlib.decompress(http_message.body)
-                except:
-                  http_message.body = zlib.decompress(http_message.body, wbits=-15)
-              elif ce == 'gzip':
-                http_message.body = gzip.decompress(http_message.body)
-              elif ce == 'br':
-                http_message.body = brotli.decompress(http_message.body)
-              else:
-                raise
-          if decode:
-            http_message.body = http_message.body.decode(decode)
-        except:
-          if http_message.method is not None and iss:
-            try:
-              write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
-            except:
-              pass
-          return http_message.clear()
+      try:
+        if http_message.body and hce:
+          for ce in hce[::-1]:
+            if ce == 'deflate':
+              try:
+                http_message.body = zlib.decompress(http_message.body)
+              except:
+                http_message.body = zlib.decompress(http_message.body, wbits=-15)
+            elif ce == 'gzip':
+              http_message.body = gzip.decompress(http_message.body)
+            elif ce == 'br':
+              http_message.body = brotli.decompress(http_message.body)
+            else:
+              raise
+        if decode:
+          http_message.body = http_message.body.decode(decode)
+      except:
+        if http_message.method is not None and iss:
+          try:
+            write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
+          except:
+            pass
+        return http_message.clear()
       return http_message
     finally:
       if iss:
