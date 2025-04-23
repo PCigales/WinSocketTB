@@ -155,7 +155,10 @@ with IDSocketGenerator() as IDGen:
   print(rep.body(20))
   pcon[0].shutclose()
 
-with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), IDAltSocketGenerator() as IDGen:
+BA = HTTPBasicAuthenticator()
+with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True, basic_auth=BA), IDAltSocketGenerator() as IDGen:
+  BA.set_realm('/', 'root')
+  BA.set_credential('user', 'password', 'root')
   IDSock0 = IDGen(family=socket.AF_INET)
   IDSock0.connect(('127.0.0.1', 9000))
   IDSock0.send(b'OPTIONS * HTTP/1.1\r\nHost: 127.0.0.1:9000\r\n\r\n')
@@ -168,9 +171,11 @@ with HTTPIServer(9000, '', threaded=True, max_upload_size=10, dual_stack=True), 
   IDSock0.close()
   HTTPRequest = HTTPRequestConstructor(IDGen)
   pcon = []
-  print(HTTPRequest('*', method='OPTIONS', pconnection=pcon))
+  print(HTTPRequest('http://localhost:9000/*', method='OPTIONS', pconnection=pcon))
   print(HTTPRequest('http://localhost:9000/', pconnection=pcon))
   print(pcon)
+  print(HTTPRequest('http://localhost:9000/', pconnection=pcon, basic_auth='user:password'))
+  BA.set_realm('/', None)
   print(HTTPRequest('http://localhost:9000/nul', method='PUT', data=b'0' * 11, pconnection=pcon))
   print(pcon)
   u = HTTPIUpload('http://localhost:9000/nul', data=b'0' * 18)

@@ -34,7 +34,7 @@ import textwrap
 import subprocess
 from msvcrt import get_osfhandle
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'HTTPBasicAuthenticator', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -3770,6 +3770,21 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       '\r\n' % (('204 No Content' if e else '201 Created'), loc, email.utils.formatdate(time.time(), usegmt=True), ('Connection: close\r\n' if c else ''))
     return (self._send_close if c else self._send)(resp)
 
+  def _send_err_u(self, r='', c=False):
+    if c is None:
+      self.error = (r,)
+      return False
+    resp = \
+      'HTTP/1.1 401 Unauthorized\r\n' \
+      'Content-Length: 0\r\n' \
+      'WWW-Authenticate: Basic realm="%s", charset="UTF-8"\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
+      '%s' \
+      '\r\n' % (r or 'HTTPIServer', email.utils.formatdate(time.time(), usegmt=True), ('Connection: close\r\n' if c else ''))
+    return (self._send_close if c else self._send)(resp)
+
   @classmethod
   def _process_path(cls, root, qpath):
     try:
@@ -3890,7 +3905,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
         if self.error:
           closed = True
           if self.error is not True:
-            self._send_err(*self.error, True)
+            (self._send_err_u if len(self.error) == 1 else self._send_err)(*self.error, True)
           continue
         if not req or not req.method:
           closed = not self._send_err_br(True)
@@ -3915,11 +3930,34 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
             closed = not self._send_err_ptl(True)
             continue
         apath, rpath, osort = self._process_path(root, req.path)
-        if apath is None:
+        try:
+          if apath is None:
+            raise
+          isd = os.path.isdir(apath)
+          if not isp and isd and not rpath.endswith('/'):
+            closed |= not self._send_mp(urllib.parse.quote(rpath + '/'))
+            continue
+        except:
           if e100:
             return self._send_err_f(None)
           closed |= not self._send_err_f(isp)
           continue
+        if self.server.basic_auth:
+          cred = req.header('Authorization', '').partition(' ')
+          cred = cred[2].strip() if cred[0].lower() == 'basic' else ''
+          if cred:
+            if not self.server.basic_auth(rpath, self, cred):
+              if e100:
+                return self._send_err_f(None)
+              closed |= not self._send_err_f(isp)
+              continue
+          else:
+            r = self.server.basic_auth(rpath, self)
+            if r is not None:
+              if e100:
+                return self._send_err_u(r, None)
+              closed |= not self._send_err_u(r, isp)
+              continue
         rrange = req.header('Range')
         if rrange:
           try:
@@ -3936,10 +3974,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
         if not isp:
           f = None
           try:
-            if os.path.isdir(apath):
-              if not rpath.endswith('/'):
-                closed |= not self._send_mp(urllib.parse.quote(rpath + '/'))
-                continue
+            if isd:
               for ind in ('index.htm', 'index.html'):
                 try:
                   ipath = os.path.join(apath, ind)
@@ -4026,7 +4061,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
               closed = not self._send_err_ptl(True)
               continue
             try:
-              if os.path.isdir(apath):
+              if isd:
                 os.utime(apath, (time.time(),) * 2)
                 closed |= not self._send_c(rpath, True)
               else:
@@ -4139,12 +4174,64 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
 
 class HTTPIServer(TCPIServer):
 
-  def __init__(self, server_address, root_directory=None, recommend_downloading=False, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None):
+  def __init__(self, server_address, root_directory=None, recommend_downloading=False, max_upload_size=0, allow_reuse_address=False, dual_stack=True, request_queue_size=128, threaded=False, daemon_thread=False, nssl_context=None, basic_auth=None):
     self.root = os.path.abspath(root_directory or os.getcwd())
     self.recommend_downloading = recommend_downloading
     self.max_upload = max_upload_size
+    self.basic_auth = basic_auth
     self._plock = threading.Lock()
     super().__init__(server_address, HTTPRequestHandler, allow_reuse_address, dual_stack, request_queue_size, threaded, daemon_thread, nssl_context)
+
+
+class HTTPBasicAuthenticator:
+
+  CRYPT = lambda password, salt: hashlib.scrypt(password, salt=salt, n=32768, r=8, p=1, maxmem=50000000, dklen=64)
+  SALT = lambda: os.urandom(64)
+
+  def __init__(self):
+    self.realms = {}
+    self.credentials = {}
+    self._cache = weakref.WeakKeyDictionary()
+
+  def __call__(self, rpath, caller, cred=None):
+    if (c := self._cache.get(caller)) is None:
+      self._cache[caller] = c = {}
+    rpath = rpath.lower()
+    user = None
+    while rpath:
+      rpath = rpath.rsplit('/', 1)[0] + '/'
+      if (r := self.realms.get(rpath)) is not None:
+        if cred is None:
+          return r
+        else:
+          if user is None:
+            try:
+              if isinstance(cred, str):
+                cred = cred.encode('utf-8')
+              user = base64.b64decode(cred).decode('utf-8').split(':', 1)[0]
+            except:
+              return False
+          if (salt_hash := self.credentials.get((user, r))) is not None:
+            if (h := c.get((cred, salt_hash[0]))) is None:
+              if (h := self.__class__.CRYPT(cred, salt_hash[0])) == salt_hash[1]:
+                c[(cred, salt_hash[0])] = h
+                return True
+            elif h == salt_hash[1]:
+              return True
+      rpath = rpath.rstrip('/')
+    return None if cred is None else (user is None)
+
+  def set_realm(self, path, name=''):
+    if name is None:
+      self.realms.pop(path.rsplit('/', 1)[0].lower() + '/', None)
+    else:
+      self.realms[path.rsplit('/', 1)[0].lower() + '/'] = name
+
+  def set_credential(self, user, password, realm=''):
+    if password is None:
+      self.credentials.pop((user, realm), None)
+    else:
+      self.credentials[(user, realm)] = ((salt := self.__class__.SALT()), self.__class__.CRYPT(base64.b64encode(('%s:%s' % (user, password)).encode('utf-8')), salt))
 
 
 class WebSocketHandler:
