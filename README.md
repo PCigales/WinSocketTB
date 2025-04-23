@@ -11,7 +11,7 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 8. Interruptible TCP server: (TCPIServer or TCPIDServer / TCPIDAltServer) + RequestHandler
 9. Multi-sockets interruptible UDP server: (MultiUDPIServer or MultiUDPIDServer / MultiUDPIDAltServer) + RequestHandler
 10. Retrieval of ip address of all interfaces: MultiUDPIServer.retrieve_ipv4s() or MultiUDPIServer.retrieve_ips()
-11. Interruptible HTTP Server: HTTPIServer [+HTTPBasicAuthenticator]
+11. Interruptible HTTP Server: HTTPIServer [+ HTTPBasicAuthenticator]
 12. Interruptible websocket server: WebSocketIDServer / WebSocketIDAltServer + WebSocketRequestHandler [+ WebSocketDataStore]
 13. Interruptible websocket client: WebSocketIDClient [+ WebSocketDataStore]
 14. Interruptible downloader compatible with proxy: HTTPIDownload, HTTPIListDownload
