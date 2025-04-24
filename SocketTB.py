@@ -3946,7 +3946,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
           cred = req.header('Authorization', '').partition(' ')
           cred = cred[2].strip() if cred[0].lower() == 'basic' else ''
           if cred:
-            if not self.server.basic_auth(rpath, self, cred):
+            if not self.server.basic_auth(rpath, self, cred.encode('utf-8'), (2 if isp else 1)):
               if e100:
                 return self._send_err_f(None)
               closed |= not self._send_err_f(isp)
@@ -4193,7 +4193,7 @@ class HTTPBasicAuthenticator:
     self.credentials = {}
     self._cache = weakref.WeakKeyDictionary()
 
-  def __call__(self, rpath, caller, cred=None):
+  def __call__(self, rpath, caller, cred=None, mode=1):
     if (c := self._cache.get(caller)) is None:
       self._cache[caller] = c = {}
     rpath = rpath.lower()
@@ -4206,32 +4206,30 @@ class HTTPBasicAuthenticator:
         else:
           if user is None:
             try:
-              if isinstance(cred, str):
-                cred = cred.encode('utf-8')
               user = base64.b64decode(cred).decode('utf-8').split(':', 1)[0]
             except:
               return False
-          if (salt_hash := self.credentials.get((user, r))) is not None:
-            if (h := c.get((cred, salt_hash[0]))) is None:
-              if (h := self.__class__.CRYPT(cred, salt_hash[0])) == salt_hash[1]:
-                c[(cred, salt_hash[0])] = h
+          if (shr := self.credentials.get((user, r))) is not None and mode & shr[2] != 0:
+            if (h := c.get((cred, shr[0]))) is None:
+              if (h := self.__class__.CRYPT(cred, shr[0])) == shr[1]:
+                c[(cred, shr[0])] = h
                 return True
-            elif h == salt_hash[1]:
+            elif h == shr[1]:
               return True
       rpath = rpath.rstrip('/')
     return None if cred is None else (user is None)
 
-  def set_realm(self, path, name=''):
+  def set_realm(self, path='/', name=''):
     if name is None:
       self.realms.pop(path.rsplit('/', 1)[0].lower() + '/', None)
     else:
       self.realms[path.rsplit('/', 1)[0].lower() + '/'] = name
 
-  def set_credential(self, user, password, realm=''):
-    if password is None:
+  def set_credential(self, user, password, realm='', get=True, put=True):
+    if password is None or not (get or put):
       self.credentials.pop((user, realm), None)
     else:
-      self.credentials[(user, realm)] = ((salt := self.__class__.SALT()), self.__class__.CRYPT(base64.b64encode(('%s:%s' % (user, password)).encode('utf-8')), salt))
+      self.credentials[(user, realm)] = ((salt := self.__class__.SALT()), self.__class__.CRYPT(base64.b64encode(('%s:%s' % (user, password)).encode('utf-8')), salt), ((3 if put else 1) if get else 2))
 
 
 class WebSocketHandler:
