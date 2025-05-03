@@ -2828,7 +2828,7 @@ class _HTTPBaseRequest:
         hccl = True
       else:
         l = len(pconnection)
-        pconnection[0:3] = [pconnection[0] if l >= 1 else None, pconnection[1] if l >= 2 else {}, []]
+        pconnection[0:3] = (pconnection[0] if l >= 1 else None), (pconnection[1] if l >= 2 else {}), []
         hccl = 'close' in (e.strip() for k, v in hitems if k.lower() == 'connection' for e in v.lower().split(','))
       if data:
         hexp = '100-continue' in (e.strip() for k, v in hitems if k.lower() == 'expect' for e in v.lower().split(','))
