@@ -21,8 +21,18 @@ from io import IOBase, BytesIO
 import math
 import base64
 import hmac
-import zlib
-import gzip
+try:
+  from compression import zlib
+except:
+  import zlib
+try:
+  from compression import gzip
+except:
+  import gzip
+try:
+  from compression import zstd
+except:
+  zstd = None
 try:
   import brotli
 except:
@@ -2252,7 +2262,7 @@ class HTTPMessage:
       if decompress and body_len != 0:
         hce = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if e not in ('chunked', '', 'identity')]
         for ce in hce:
-          if ce not in (('deflate', 'gzip', 'br') if brotli else ('deflate', 'gzip')):
+          if ce not in (({'deflate', 'gzip', 'zstd', 'br'} if zstd else {'deflate', 'gzip', 'br'}) if brotli else ({'deflate', 'gzip', 'zstd'} if zstd else {'deflate', 'gzip'})):
             if http_message.method is not None and iss:
               try:
                 write(message, ('HTTP/1.1 415 Unsupported media type\r\nContent-Length: 0\r\nDate: %s\r\nCache-Control: no-cache, no-store, must-revalidate\r\n\r\n' % email.utils.formatdate(time.time(), usegmt=True)).encode('ISO-8859-1'), (time.monotonic() + 3) if end_time is None else min(time.monotonic() + 3, end_time))
@@ -2403,6 +2413,8 @@ class HTTPMessage:
                 http_message.body = zlib.decompress(http_message.body, wbits=-15)
             elif ce == 'gzip':
               http_message.body = gzip.decompress(http_message.body)
+            elif ce == 'zstd':
+              http_message.body = zstd.decompress(http_message.body)
             elif ce == 'br':
               http_message.body = brotli.decompress(http_message.body)
             else:
@@ -2511,7 +2523,7 @@ class HTTPStreamMessage(HTTPMessage):
         hce_ = [e for h in (http_message.header('Content-Encoding', ''), http_message.header('Transfer-Encoding', '')) for e in map(str.strip, h.lower().split(',')) if e not in ('chunked', '', 'identity')]
         hce_.reverse()
         for ce in hce_:
-          if ce not in ({'deflate', 'gzip', 'br'} if brotli else {'deflate', 'gzip'}):
+          if ce not in (({'deflate', 'gzip', 'zstd', 'br'} if zstd else {'deflate', 'gzip', 'br'}) if brotli else ({'deflate', 'gzip', 'zstd'} if zstd else {'deflate', 'gzip'})):
             if http_message.method is not None and iss:
               try:
                 if error415_handler is None:
@@ -2555,6 +2567,8 @@ class HTTPStreamMessage(HTTPMessage):
                 dec = hce[i] = zlib.decompressobj(wbits=-15)
             elif dec == 'gzip':
               dec = hce[i] = zlib.decompressobj(wbits=31)
+            elif dec == 'zstd':
+              dec = hce[i] = zstd.ZstdDecompressor()
             elif dec == 'br':
               dec = hce[i] = _brotli.decompressobj()
             else:
@@ -2723,9 +2737,7 @@ class HTTPStreamMessage(HTTPMessage):
             cls._read_trailers(buff[chunk_pos:].decode('ISO-8859-1'), http_message)
         if bbuf.pending:
           for dec in hce:
-            if isinstance(dec, str):
-              error(bbuf.read())
-            elif not dec.eof:
+            if isinstance(dec, str) or not dec.eof:
               error(bbuf.read())
         return bbuf.read()
       finally:
@@ -2838,7 +2850,7 @@ class _HTTPBaseRequest:
       if hexp:
         headers['Expect'] = '100-continue'
       if 'accept-encoding' not in (k.lower() for k, v in hitems):
-        headers['Accept-Encoding'] = ('identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip') if decompress else 'identity'
+        headers['Accept-Encoding'] = (('identity, deflate, gzip, zstd, br' if zstd else 'identity, deflate, gzip, br') if brotli else ('identity, deflate, gzip, zstd' if zstd else 'identity, deflate, gzip')) if decompress else 'identity'
       data_str = None
       if data is not None:
         if hasattr(data, 'read'):
@@ -3511,7 +3523,7 @@ class _MimeTypes:
 
 class HTTPRequestHandler(RequestHandler, _MimeTypes):
   _fn_cmp = cmp_to_key(shlwapi.StrCmpLogicalW)
-  _encodings = ({'identity': 50, '*': 75}, ({'deflate': 0, 'gzip': 1, 'br': 2, 'identity': 50, '*': 75} if brotli else {'deflate': 0, 'gzip': 1, 'identity': 50, '*': 75}))
+  _encodings = ({'identity': 50, '*': 75}, (({'deflate': 0, 'gzip': 1, 'zstd': 2, 'br': 3, 'identity': 50, '*': 75} if zstd else {'deflate': 0, 'gzip': 1, 'br': 3, 'identity': 50, '*': 75}) if brotli else ({'deflate': 0, 'gzip': 1, 'zstd': 2, 'identity': 50, '*': 75} if zstd else {'deflate': 0, 'gzip': 1, 'identity': 50, '*': 75})))
 
   @classmethod
   def _set_enc(cls, aenc, mt='text', fid=False):
@@ -3546,6 +3558,8 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
           elif enc == 1:
             return 'gzip', zlib.compressobj(wbits=31)
           elif enc == 2:
+            return 'zstd', zstd.ZstdCompressor(level=9)
+          elif enc == 3:
             return 'br', _brotli.compressobj()
           elif enc == 50:
             return False
@@ -5117,7 +5131,7 @@ class HTTPIDownload(_MimeTypes):
     if any(k.lower() == 'range' for k in self.headers):
       return None
     self.headers['Accept-Encoding'] = 'identity'
-    self.headers['TE'] = 'identity, deflate, gzip, br' if brotli else 'identity, deflate, gzip'
+    self.headers['TE'] = ('identity, deflate, gzip, zstd, br' if zstd else 'identity, deflate, gzip, br') if brotli else ('identity, deflate, gzip, zstd' if zstd else 'identity, deflate, gzip')
     try:
       file = os.fsdecode(file)
     except:
@@ -5937,6 +5951,8 @@ class HTTPIUpload(_MimeTypes):
             comp = zlib.compressobj(wbits=15)
           elif file_compress == 'gzip':
             comp = zlib.compressobj(wbits=31)
+          elif file_compress == 'zstd':
+            comp = zstd.ZstdCompressor(level=9)
           elif file_compress == 'br':
             comp = _brotli.compressobj()
         if comp:
