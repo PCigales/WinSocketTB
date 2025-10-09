@@ -1,4 +1,4 @@
-# SocketTB v1.4.1 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.4.2 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
