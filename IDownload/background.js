@@ -18,7 +18,8 @@ browser.downloads.onCreated.addListener(
     Promise.all([get_sid(), get_histopts()]).then(
       function ([sid, histopts]) {
         const sdid = `${sid}_${did}`;
-        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
+        const st = Date.now();
+        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false, selfclose: true}), browser.storage.session.set({[sdid]: [dinf, st, 0]}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: [dinf, st, 0]}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
       }
     );
   }
@@ -35,7 +36,8 @@ browser.downloads.onChanged.addListener(
         const did = item.id;
         const dinf = {url: inf[0], file: delta.filename.current, headers: inf[1]};
         const sdid = `${sid}_${did}`;
-        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false}), browser.storage.session.set({[sdid]: dinf}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: dinf}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
+        const st = Date.now();
+        Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false, selfclose: true}), browser.storage.session.set({[sdid]: [dinf, st, 0]}), ((histopts[0] > 0) && (histopts[1] || ! item.incognito) ? browser.storage.local.set({[`i${item.incognito ? 0 : 1}_${sdid}`]: [dinf, st, 0]}) : null)]).then(([results]) => browser.runtime.sendNativeMessage("idownload", {...results, sdid, ...dinf})).then((response) => response ? browser.downloads.cancel(did): null).catch(Boolean);
       }
     );
   }
@@ -56,7 +58,8 @@ browser.runtime.onMessage.addListener(
         if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {throw null;}
         if (Object.hasOwn(message, "explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
         const sdid = message.sdid;
-        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (Object.hasOwn(message.progress, "sections") ? message.progress : null)}));
+        const st = Date.now();
+        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false, selfclose: true}), browser.storage.session.get(sdid), browser.storage.local.get(["p0_" + sdid, "p1_" + sdid])]).then(([results1, results2, results3]) => Promise.all([browser.storage.session.set({[sdid]: [results2[sdid][0], st, message.progress.downloaded]}), browser.storage.local.set(Object.fromEntries(Object.keys(results3).map((r) => [r, [results3[sdid][0], st, message.progress.downloaded]])))]).then(() => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid][0], progress: (Object.hasOwn(message.progress, "sections") ? message.progress : null)})));
       }
     ).catch(() => false).then(respond);
     return true;

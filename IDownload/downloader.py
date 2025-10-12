@@ -141,11 +141,12 @@ elif not suspended:
         break
       time.sleep(0.5)
 
-while msvcrt.kbhit():
-  if msvcrt.getch() == b'\xe0':
-    msvcrt.getch()
-print('\r\nPress any key to exit')
-msvcrt.getch()
+if not message.get('selfclose'):
+  while msvcrt.kbhit():
+    if msvcrt.getch() == b'\xe0':
+      msvcrt.getch()
+  print('\r\nPress any key to exit')
+  msvcrt.getch()
 
 DownloadDS.before_shutdown = 'end'
 th.join()

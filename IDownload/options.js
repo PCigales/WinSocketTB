@@ -23,7 +23,16 @@ function restore(event) {
     }
   );
 }
+function install() {
+  const a = document.createElement("a");
+  for (const name of ["SocketTB.py", "idownload_E.json", "idownload_F.json", "idownload.bat", "idownload.py", "downloader.py", "websocket.py"]) {
+    a.href = browser.runtime.getURL(name);
+    a.download = name;
+    a.click();
+  }
+}
 document.getElementById("form").addEventListener("submit", save);
 document.getElementById("form").addEventListener("reset", restore);
+document.getElementById("link").addEventListener("click", install);
 Array.prototype.forEach.call(document.getElementById("form").getElementsByTagName("input"), function (i) {i.addEventListener("invalid", show_msg.bind(`invalid "${i.labels[0]?.innerText.replace(/(.+?)(.*).+/, (m, p1, p2) => p1.toLowerCase() + p2) || i.id}"`));});
 restore();

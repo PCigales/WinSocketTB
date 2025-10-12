@@ -48,6 +48,18 @@
           }
         }
       }
+      details {
+        margin-top: 1em;
+        padding-bottom: 0.5em;
+        &>summary {
+          margin-bottom: 0.5em;
+        }
+        &>span {
+          color: light-dark(#044c9f, #a4cefe);
+          text-decoration: underline;
+          cursor: pointer;
+        }
+      }
     </style>
   </head>
   <body>
@@ -59,8 +71,13 @@
       <label for="sparse">Use of sparse file:</label><input type="checkbox" id="sparse">
       <label for="histper">Downloads history retention period in days:</label><input type="number" id="histper" min="0" max="90" step="1" value="7">
       <label for="histinco">Recording in the history of private browsing downloads:</label><input type="checkbox" id="histinco">
+      <label for="selfclose">Self closing of the downloader script window:</label><input type="checkbox" id="selfclose" checked>
       <div><button type="submit" id="save">Save</button><span id="message"></span><button type="reset" id="restore">Restore</button></div>
     </form>
+    <details>
+      <summary>Installation</summary>
+      &nbsp;&nbsp;&nbsp;Click on this <span id="link">link</span>, save the files in the same folder, and run "idownload.py" once.
+    </details>
     <script src="options.js"></script>
   </body>
 </html>
