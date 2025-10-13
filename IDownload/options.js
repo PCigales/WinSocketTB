@@ -1,3 +1,9 @@
+/*
+idownload v1.1 (https://github.com/PCigales/WinSocketTB)
+Copyright © 2025 PCigales
+This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
+*/
+
 "use strict";
 if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 function show_msg() {
@@ -24,11 +30,8 @@ function restore(event) {
   );
 }
 function install() {
-  const a = document.createElement("a");
-  for (const name of ["SocketTB.py", "idownload_E.json", "idownload_F.json", "idownload.bat", "idownload.py", "downloader.py", "websocket.py"]) {
-    a.href = browser.runtime.getURL(name);
-    a.download = name;
-    a.click();
+  for (const name of ["SocketTB.py", "idownload_E.json", "idownload_F.json", "idownload.py", "downloader.py", "websocket.py", "idownload.bat"]) {
+    fetch(browser.runtime.getURL(name)).then((r) => r.blob()).then(function (b) {const url = URL.createObjectURL(b); const a = document.createElement("a"); a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);});
   }
 }
 document.getElementById("form").addEventListener("submit", save);

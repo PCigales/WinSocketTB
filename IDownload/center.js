@@ -1,3 +1,9 @@
+/*
+idownload v1.1 (https://github.com/PCigales/WinSocketTB)
+Copyright © 2025 PCigales
+This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
+*/
+
 "use strict";
 if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 const sid = (new URLSearchParams(location.search)).get("sid");
@@ -27,9 +33,9 @@ async function set_progress(sdid) {
   } else {
     prog[1] = null;
     download.getElementsByClassName("estimation")[1].innerText = "";
-  }
-  if (progress.status == "aborted" && Object.hasOwn(progress, "sections")) {
-    await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]).then((results) => browser.storage.local.set(Object.fromEntries(Object.keys(results).map((r) => ["p" + r.substring(1), progress]))));
+    if (progress.status == "aborted" && Object.hasOwn(progress, "sections")) {
+      await browser.storage.local.get(["i0_" + sdid, "i1_" + sdid]).then((results) => browser.storage.local.set(Object.fromEntries(Object.keys(results).map((r) => ["p" + r.substring(1), progress]))));
+    }
   }
 }
 async function create() {

@@ -1,3 +1,9 @@
+/*
+idownload v1.1 (https://github.com/PCigales/WinSocketTB)
+Copyright © 2025 PCigales
+This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
+*/
+
 "use strict";
 if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 browser.webRequest.onSendHeaders.addListener(

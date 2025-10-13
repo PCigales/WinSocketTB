@@ -1,3 +1,7 @@
+# idownload v1.1 (https://github.com/PCigales/WinSocketTB)
+# Copyright © 2025 PCigales
+# This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
+
 import sys
 import subprocess
 import json
@@ -88,8 +92,8 @@ def connect(port, download_ds):
         if download_ds.before_shutdown:
           return
         time.sleep(1)
-      if download_ds.before_shutdown:
-        return
+        if download_ds.before_shutdown:
+          return
     else:
       download_ds.client = DownloadWSClient
       return
