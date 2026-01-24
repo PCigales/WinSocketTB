@@ -6,6 +6,9 @@ import threading
 import io
 import time
 import locale
+import email.utils
+import webbrowser
+import msvcrt
 
 with ISocketGenerator() as IGen:
   ISock0 = IGen(family=socket.AF_INET, type=socket.SOCK_STREAM)
@@ -208,3 +211,215 @@ with TOTPassword('AAAAAAAAAAAAAAAA') as totp:
     print('', p, str(r).rjust(4), end ='\b'*12, flush=True)
     time.sleep(1)
   print('')
+
+body = \
+  '  <!DOCTYPE h\tml>\r\n' \
+  '  <html lang="en">\r\n' \
+  '    <head>\r\n' \
+  '      <meta charset="utf-8">\r\n' \
+  '      <title>WebRTC DataChannel</title>\r\n' \
+  '      <style>\r\n' \
+  '        body {\r\n' \
+  '          width: 100vw;\r\n' \
+  '          height: 100vh;\r\n' \
+  '          margin:0;\r\n' \
+  '          --number: 1;\r\n' \
+  '        }\r\n' \
+  '        iframe {\r\n' \
+  '          display: block;\r\n' \
+  '          box-sizing: border-box;\r\n' \
+  '          width: 100%;\r\n' \
+  '          height: calc(100% / var(--number));\r\n' \
+  '        };\r\n' \
+  '      </style>\r\n' \
+  '      <style id="style" type="text/css-iframe">\r\n' \
+  '        ul {\r\n' \
+  '          margin: 0;\r\n' \
+  '          padding: 0.5em;\r\n' \
+  '          list-style: inside disclosure-closed;\r\n' \
+  '          white-space: pre;\r\n' \
+  '        }\r\n' \
+  '        h2 {\r\n' \
+  '          display: block;\r\n' \
+  '          margin: 0;\r\n' \
+  '        }\r\n' \
+  '        h3 {\r\n' \
+  '          display: inline-block;\r\n' \
+  '          margin-block: 0.2em;\r\n' \
+  '        }\r\n' \
+  '        input, span {\r\n' \
+  '          width: 100em;\r\n' \
+  '          margin: 0.5em;\r\n' \
+  '          vertical-align: text-bottom;\r\n' \
+  '          font-size: 1em;\r\n' \
+  '        }\r\n' \
+  '        span {\r\n' \
+  '          margin-inline: 1em;\r\n' \
+  '        }\r\n' \
+  '        li {\r\n' \
+  '          margin-left: 1em;\r\n' \
+  '        }\r\n' \
+  '      </style>\r\n' \
+  '      <script id="script" type="text/js-iframe">\r\n' \
+  '        "use strict";\r\n' \
+  '        const WebRTCDataChannelSignaler = Inherits(function constructor(path, name, config, target) {\r\n' \
+  '          return SuperDerivedConstructor(this, new.target, target, constructor, path, name, config);\r\n' \
+  '        }, WebRTCSignaler);\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onopenhandler = function () {\r\n' \
+  '          SuperMethod(WebRTCDataChannelSignaler, "onopenhandler", this);\r\n' \
+  '          const peers = document.createElement("ul");\r\n' \
+  '          peers.id = `peers ${this.name}`;\r\n' \
+  '          const name = document.createElement("h2");\r\n' \
+  '          name.appendChild(document.createTextNode(decodeURIComponent(this.name)));\r\n' \
+  '          peers.appendChild(name);\r\n' \
+  '          peers.appendChild(document.createElement("input"));\r\n' \
+  '          document.body.appendChild(peers);\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onerrorhandler = function () {\r\n' \
+  '          SuperMethod(WebRTCDataChannelSignaler, "onerrorhandler", this);\r\n' \
+  '          const peers = document.getElementById(`peers ${this.name}`);\r\n' \
+  '          if (peers) {\r\n' \
+  '            document.body.removeChild(peers);\r\n' \
+  '          }\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onclosehandler = function () {\r\n' \
+  '          SuperMethod(WebRTCDataChannelSignaler, "onclosehandler", this);\r\n' \
+  '          const peers = document.getElementById(`peers ${this.name}`);\r\n' \
+  '          if (peers) {\r\n' \
+  '            document.body.removeChild(peers);\r\n' \
+  '          }\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onpeeraddhandler = function (name) {\r\n' \
+  '          SuperMethod(WebRTCDataChannelSignaler, "onpeeraddhandler", this, name);\r\n' \
+  '          const peers = document.getElementById(`peers ${this.name}`);\r\n' \
+  '          const cpeer = document.createElement("li");\r\n' \
+  '          const peer = document.createElement("h3");\r\n' \
+  '          peer.id = `peer ${this.name} ${encodeURIComponent(name)}`;\r\n' \
+  '          peer.appendChild(document.createTextNode(name));\r\n' \
+  '          peer.style.cursor = "alias";\r\n' \
+  '          peer.onclick = this.onpeerclickhandler.bind(this);\r\n' \
+  '          cpeer.appendChild(peer);\r\n' \
+  '          cpeer.appendChild(document.createElement("span"));\r\n' \
+  '          peers.insertBefore(cpeer, Array.prototype.find.call(peers.getElementsByTagName("h3"), (e) => e.innerText > name)?.parentElement ?? null);\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onpeerremovehandler = function (name) {\r\n' \
+  '          SuperMethod(WebRTCDataChannelSignaler, "onpeerremovehandler", this, name);\r\n' \
+  '          const peer = document.getElementById(`peer ${this.name} ${encodeURIComponent(name)}`);\r\n' \
+  '          if (peer) {document.getElementById(`peers ${this.name}`).removeChild(peer.parentElement);}\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onchannelopenhandler = function ({target:channel}) {\r\n' \
+  '          const peer = document.getElementById(`peer ${channel.label}`);\r\n' \
+  '          peer.style.pointerEvents = "";\r\n' \
+  '          channel.send(`[${(new Date()).toLocaleString()}]\\u00a0\\u00a0${peer.parentElement.parentElement.firstElementChild.nextElementSibling.value}`);\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onchannelmessagehandler = function ({target:channel, data}) {\r\n' \
+  '          document.getElementById(`peer ${this.signaler.name} ${this.dest}`).parentElement.lastElementChild.textContent = data;\r\n' \
+  '          if (! data.startsWith("[ok]")) {channel.send("[ok] " + data)};\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onchannelclosehandler = function ({target:channel}) {\r\n' \
+  '          this.close();\r\n' \
+  '          this.onconnectionstatechangehandler("closed");\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onpeerclickhandler = function ({currentTarget}) {\r\n' \
+  '          const name = currentTarget.id.split(" ")[2];\r\n' \
+  '          if (this.connections.has(name)) {\r\n' \
+  '            const connection = this.connections.get(name);\r\n' \
+  '            connection.channel.send(`[${(new Date()).toLocaleString()}]\\u00a0\\u00a0${currentTarget.parentElement.parentElement.firstElementChild.nextElementSibling.value}`);\r\n' \
+  '          } else {\r\n' \
+  '            const connection = this.connection(decodeURIComponent(name));\r\n' \
+  '            if (! connection) {return;}\r\n' \
+  '            const channel = connection.createDataChannel(`${this.name} ${name}`);\r\n' \
+  '            channel.onopen = this.onchannelopenhandler.bind(connection);\r\n' \
+  '            channel.onmessage = this.onchannelmessagehandler.bind(connection);\r\n' \
+  '            channel.onclose = this.onchannelclosehandler.bind(connection);\r\n' \
+  '            connection.channel = channel;\r\n' \
+  '          }\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.connection = function (dest) {\r\n' \
+  '          const connection =  SuperMethod(WebRTCDataChannelSignaler, "connection", this, dest);\r\n' \
+  '          if (connection) {document.getElementById(`peer ${this.name} ${encodeURIComponent(dest)}`).style.pointerEvents = "none";}\r\n' \
+  '          return connection;\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onconnectiondatachannelhandler = function (channel) {\r\n' \
+  '          const signaler = this.signaler;\r\n' \
+  '          const peer = document.getElementById(`peer ${signaler.name} ${this.dest}`);\r\n' \
+  '          peer.style.pointerEvents = "";\r\n' \
+  '          channel.onmessage = signaler.onchannelmessagehandler.bind(this);\r\n' \
+  '          channel.onclose = signaler.onchannelclosehandler.bind(this);\r\n' \
+  '          this.channel = channel;\r\n' \
+  '        };\r\n' \
+  '        WebRTCDataChannelSignaler.prototype.onconnectionstatechangehandler = function handler(state, infos) {\r\n' \
+  '          const peer = document.getElementById(`peer ${this.signaler.name} ${this.dest}`);\r\n' \
+  '          if (! peer) {return;}\r\n' \
+  '          if (state == "connected") {\r\n' \
+  '            const inf = infos ?? this.infos;\r\n' \
+  '            if (inf) {\r\n' \
+  '              peer.title = Object.entries(inf).map((e) => e.join(": ")).join("\\r\\n");\r\n' \
+  '            } else if (! infos) {\r\n' \
+  '              const connection = this;\r\n' \
+  '              this.infos2.then(function (inf) {handler.call(connection, connection.connectionState, inf);});\r\n' \
+  '            }\r\n' \
+  '          } else {\r\n' \
+  '            peer.title = "";\r\n' \
+  '          }\r\n' \
+  '        }\r\n' \
+  '        const server = parent.server;\r\n' \
+  '        const name = document.currentScript.id;\r\n' \
+  '        var signaler = null;\r\n' \
+  '        fetch(`${server.secure ? "https" : "http"}://${server.address}/channel?test`, {mode: "cors", credentials: "include", headers: {Authorization: "Basic " + btoa(name + ":WebRTC")}}).then((response) => response.ok ? response.text() : null, () => null).then(function (code) {\r\n' \
+  '          if (code) {signaler = WebRTCDataChannelSignaler(`${server.secure ? "wss": "ws"}://${server.address}/signaling;${code}`, `<${name}>`);}\r\n' \
+  '        });\r\n' \
+  '      </script>\r\n' \
+  '    </head>\r\n' \
+  '    <body>\r\n' \
+  '      <script>\r\n' \
+  '        var server = {address: "127.0.0.1:9000", secure: location.protocol.endsWith("s:")};\r\n' \
+  '        let number = 3;\r\n' \
+  '        const url_script = URL.createObjectURL(new Blob([document.getElementById("script").textContent],{type: "text/javascript"}));\r\n' \
+  '        const url_style = URL.createObjectURL(new Blob([document.getElementById("style").textContent],{type: "text/css"}));\r\n' \
+  '        document.body.style.setProperty("--number", number);\r\n' \
+  '        for (let i=0; i<number; i++) {\r\n' \
+  '          const frame = document.createElement("iframe");\r\n' \
+  '          frame.srcdoc = `\\<link rel="stylesheet" href="${url_style}"/\\>\\<script src="${server.secure ? "https" : "http"}://${server.address}/script.js" onerror="window.stop()"\\>\\</script\\>\\<script id="${String.fromCharCode(65 + i)}" src="${url_script}"\\>\\</script\\>`;\r\n' \
+  '          frame.onload = function () {if (--number == 0) {URL.revokeObjectURL(url_script); URL.revokeObjectURL(url_style);}}\r\n' \
+  '          document.body.appendChild(frame);\r\n' \
+  '        }\r\n' \
+  '      </script>\r\n' \
+  '    </body>\r\n' \
+  '  </html>\r\n' \
+  .encode('utf-8')
+class TestRequestHandler(RequestHandler):
+  def handle(self):
+    if self.server.closed:
+      return
+    req = HTTPMessage(self.request)
+    if req.method not in {'GET', 'HEAD'} or req.path.lower() != '/page.html':
+      return
+    resp = \
+      'HTTP/1.1 200 OK\r\n' \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Content-Length: %d\r\n' \
+      'Content-Type: text/html; charset=utf-8\r\n' \
+      'Connection: close\r\n' \
+      '\r\n' % (email.utils.formatdate(time.time(), usegmt=True), len(body))
+    self.request.sendall(resp.encode('ISO-8859-1'))
+    if req.method != 'HEAD':
+      self.request.sendall(body)
+BA = WebRTCBasicAuthenticator()
+code = BA.set_channel('test')
+for n in 'ABC':
+  BA.set_credential(n, 'WebRTC', 'test')
+with WebRTCSignalingServer(9000, basic_auth=BA) as SignalingServer, TCPIServer(9001, TestRequestHandler, threaded=True):
+  SignalingServer.open('test')
+  print('http://127.0.0.1:9001/page.html')
+  webbrowser.open('http://127.0.0.1:9001/page.html')
+  print('Press "S" to stop...')
+  while True:
+    k = msvcrt.getch()
+    if k == b'\xe0':
+      k = msvcrt.getch()
+      k = b''
+    if k.upper() == b'S':
+      break
+  SignalingServer.close('test')

@@ -1,4 +1,4 @@
-# SocketTB v1.4.2 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.4.3 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -44,7 +44,7 @@ import textwrap
 import subprocess
 from msvcrt import get_osfhandle
 
-__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'HTTPBasicAuthenticator', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
+__all__ = ['socket', 'ISocketGenerator', 'IDSocketGenerator', 'IDAltSocketGenerator', 'NestedSSLContext', 'HTTPMessage', 'HTTPStreamMessage', 'HTTPRequestConstructor', 'RSASelfSigned', 'UDPIServer', 'UDPIDServer', 'UDPIDAltServer', 'TCPIServer', 'TCPIDServer', 'TCPIDAltServer', 'RequestHandler', 'HTTPRequestHandler', 'HTTPIServer', 'HTTPBasicAuthenticator', 'MultiUDPIServer', 'MultiUDPIDServer', 'MultiUDPIDAltServer', 'WebSocketDataStore', 'WebSocketRequestHandler', 'WebSocketIDServer', 'WebSocketIDAltServer', 'WebSocketIDClient', 'WebRTCSignalingServer', 'WebRTCBasicAuthenticator', 'HTTPIDownload', 'HTTPIListDownload', 'HTTPIUpload', 'NTPClient', 'TOTPassword']
 
 ws2 = ctypes.WinDLL('ws2_32', use_last_error=True)
 iphlpapi = ctypes.WinDLL('iphlpapi', use_last_error=True)
@@ -597,13 +597,13 @@ class ISocketGenerator:
   def setdefaulttimeout(self, timeout):
     self.defaulttimeout = timeout
 
-  def create_connection(self, address, timeout='', source_address=None, type=socket.SOCK_STREAM):
+  def create_connection(self, address, timeout='', source_address=None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM):
     if timeout == '':
       timeout = socket.getdefaulttimeout()
     err = None
     t = time.monotonic()
     rt = timeout
-    for res in socket.getaddrinfo(*address, family=socket.AF_UNSPEC, type=type):
+    for res in socket.getaddrinfo(*address, family=family, type=type):
       if self.closed:
         return None
       if timeout is not None and rt < 0:
@@ -1959,6 +1959,9 @@ class NestedSSLContext(ssl.SSLContext):
       cert.pipe_PEM('cert' + cid, 'key' + cid, 2)
       self.load_cert_chain(r'\\.\pipe\cert%s.pem' % cid, r'\\.\pipe\key%s.pem' % cid)
 
+  PROTOCOL_TLS_CLIENT = ssl.PROTOCOL_TLS_CLIENT
+  PROTOCOL_TLS_SERVER = ssl.PROTOCOL_TLS_SERVER
+
   _nestedSSLContext_set = {*locals(), '_encode_hostname', 'cert_store_stats', 'get_ca_certs', 'get_ciphers', 'session_stats'}
 
 
@@ -2902,8 +2905,8 @@ class _HTTPBaseRequest:
             if ((domain[-len(k[0][0]) - 1 :] in (k[0][0], '.' + k[0][0])) if (k[0][1] and not dom_ip) else (domain == k[0][0])) and path[: len(k[1]) + (1 if k[1][-1:] != '/' else 0)] in (k[1], k[1] + '/'):
               if (k[2] not in ck) or (len(k[0][0]) > len(ck[k[2]][1]) or (len(k[0][0]) == len(ck[k[2]][1]) and len(k[1]) >= len(ck[k[2]][2]))):
                 ck[k[2]] = (v, k[0][0], k[1])
-        path = cls.connect(url, url_p, headers, timeout, max_hlength if max_length < 0 else min(max_length, max_hlength), end_time, pconnection, ip)
         try:
+          path = cls.connect(url, url_p, headers, timeout, max_hlength if max_length < 0 else min(max_length, max_hlength), end_time, pconnection, ip)
           code = '100'
           rem = None
           pconnection[0].settimeout(cls._rem_time(None, end_time))
@@ -3657,7 +3660,7 @@ class HTTPRequestHandler(RequestHandler, _MimeTypes):
       'Cache-Control: no-cache, no-store, must-revalidate\r\n' \
       '%s' \
       '\r\n' % (e, m, len(rbody), email.utils.formatdate(time.time(), usegmt=True), ('Connection: close\r\n' if c else ''))
-    return (self._send_close if c else self._send)(resp, rbody)
+    return (self._send_close if c else self._send)(resp, (rbody if self.req.method != 'HEAD' else None))
   def _send_err_br(self, c=False):
     return self._send_err(400, 'Bad request', c)
   def _send_err_ef(self, c=False):
@@ -4208,7 +4211,7 @@ class HTTPBasicAuthenticator:
     self._cache = weakref.WeakKeyDictionary()
 
   def __call__(self, rpath, caller, cred=None, mode=1):
-    if (c := self._cache.get(caller)) is None:
+    if caller is not None and (c := self._cache.get(caller)) is None:
       self._cache[caller] = c = {}
     rpath = rpath.lower()
     user = None
@@ -4234,6 +4237,8 @@ class HTTPBasicAuthenticator:
     return None if cred is None else (user is None)
 
   def set_realm(self, path='/', name=''):
+    if not path.startswith('/'):
+      path = '/' + path
     if name is None:
       self.realms.pop(path.rsplit('/', 1)[0].lower() + '/', None)
     else:
@@ -4249,6 +4254,8 @@ class HTTPBasicAuthenticator:
 class WebSocketHandler:
 
   FRAGMENT_FRAME = 1000000
+  TYPES_OPCODES = {'text_data': 0x01, 'binary_data': 0x02, 'close': 0x08, 'ping': 0x09, 'pong': 0x0a}
+  OPCODES_TYPES = {0x00: 'data', 0x01: 'data', 0x02: 'data', 0x08: 'close', 0x09: 'ping', 0x0a: 'pong'}
 
   def __init__(self, connection, side='server'):
     self.connection = connection
@@ -4322,7 +4329,6 @@ class WebSocketHandler:
       return memoryview(b''.join(((int.from_bytes(data[i:i+1000000], 'little') ^ m).to_bytes(l, 'little')) for i in range(0, ld, 1000000)))[:ld]
 
   def build_frame(self, type, data):
-    opcodes = {'text_data': 0x01, 'binary_data': 0x02, 'close': 0x08, 'ping': 0x09, 'pong': 0x0a}
     if type == 'data':
       if isinstance(data, str):
         data_m = memoryview(data.encode('utf-8'))
@@ -4338,14 +4344,14 @@ class WebSocketHandler:
         data_m = memoryview(data)
       except:
         return None
-    if type not in opcodes:
+    opc = WebSocketHandler.TYPES_OPCODES.get(type)
+    if opc is None:
       return None
     if self.mask:
       mask = os.urandom(4)
-    opc = opcodes[type]
     if opc > 0x02:
       if len(data_m) <= 0x7d:
-        return (struct.pack('BB4s', 0x80 + opcodes[type], 0x80 + len(data_m), mask) + WebSocketHandler.xor32(mask, data_m)) if self.mask else (struct.pack('BB', 0x80 + opcodes[type], len(data_m)) + data_m)
+        return (struct.pack('BB4s', 0x80 + opc, 0x80 + len(data_m), mask) + WebSocketHandler.xor32(mask, data_m)) if self.mask else (struct.pack('BB', 0x80 + opc, len(data_m)) + data_m)
       else:
         return None
     data_f = tuple(data_m[i:i+self.FRAGMENT_FRAME] for i in range(0, len(data_m), self.FRAGMENT_FRAME))
@@ -4402,10 +4408,9 @@ class WebSocketHandler:
     return True
 
   def get_type(self):
-    opcodes = {0x00: 'data', 0x01: 'data', 0x02: 'data', 0x08: 'close', 0x09: 'ping', 0x0a: 'pong'}
     if len(self.buffer) == 0:
       return False
-    self.frame_type = opcodes.get(self.buffer[0] & 0x0f, 'bad')
+    self.frame_type = WebSocketHandler.OPCODES_TYPES.get(self.buffer[0] & 0x0f, 'bad')
     return True
 
   def get_length(self):
@@ -4781,14 +4786,20 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
   def closed_callback(self):
     WebSocketHandler.closed_callback(self)
 
-  def handle(self):
-    if self.server.closed:
-      return
+  def handle_other(self, req):
     resp_err_br = \
       'HTTP/1.1 400 Bad Request\r\n' \
       'Content-Length: 0\r\n' \
       'Connection: close\r\n' \
       '\r\n'
+    try:
+      self.request.sendall(resp_err_br.encode('ISO-8859-1'))
+    except:
+      pass
+
+  def handle(self):
+    if self.server.closed:
+      return
     resp_err_nf = \
       'HTTP/1.1 404 File not found\r\n' \
       'Content-Length: 0\r\n' \
@@ -4796,10 +4807,7 @@ class WebSocketRequestHandler(RequestHandler, WebSocketHandler):
       '\r\n'
     req = HTTPMessage(self.request)
     if req.method != 'GET' or not req.in_header('Upgrade', 'websocket') or not req.header('Sec-WebSocket-Key'):
-      try:
-        self.request.sendall(resp_err_br.encode('ISO-8859-1'))
-      except:
-        pass
+      self.handle_other(req)
       return
     path = req.path.lstrip('/').strip()
     with self.server.lock:
@@ -5103,6 +5111,300 @@ class WebSocketIDClient(WebSocketHandler):
     else:
       th = threading.Thread(target=self._close, args=(timeout, False), daemon=self.daemon_thread)
       th.start()
+
+
+class WebRTCSignalingServerChannel(WebSocketServerChannel):
+
+  def __init__(self, path):
+    super().__init__(path, None)
+    self.peers = {}
+    self.lock = threading.Lock()
+
+  def register_peer(self, name, handler):
+    with self.lock:
+      if not name or name in self.peers:
+        return False
+      m = ':%s=1' % name
+      for n, h in self.peers.items():
+        h.send(m)
+        handler.send(':%s=1' % n)
+      self.peers[name] = handler
+      return True
+
+  def unregister_peer(self, name):
+    with self.lock:
+      if (handler := self.peers.pop(name, None)) is None:
+        return False
+      m = ':%s=0' % name
+      for h in self.peers.values():
+        h.send(m)
+      return True
+
+  def forward(self, name, data):
+    if (handler := self.peers.get(name)) is not None:
+      handler.send(data)
+
+
+class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
+
+  WebRTCScript = \
+    '"use strict";\r\n' \
+    'const Null = {};\r\n' \
+    'const SuperBuiltinConstructor = (thisarg, newtarget, target, constructor, ...args) => newtarget ? Reflect.construct(Object.getPrototypeOf(constructor), args, newtarget) : (thisarg instanceof constructor ? thisarg : Reflect.construct(Object.getPrototypeOf(constructor), args, target ?? constructor));\r\n' \
+    'const SuperDerivedConstructor = (thisarg, newtarget, target, constructor, ...args) => newtarget ? (args.push(newtarget), Reflect.apply(Object.getPrototypeOf(constructor), undefined, args)) : (thisarg instanceof constructor ? Reflect.apply(Object.getPrototypeOf(constructor), thisarg, args) : (args.push(target ?? constructor), Reflect.apply(Object.getPrototypeOf(constructor), undefined, args)));\r\n' \
+    'const Inherits = (child, parent) => (Object.setPrototypeOf(child.prototype, parent.prototype), Object.setPrototypeOf(child, parent), child);\r\n' \
+    'const SuperMethod = (constructor, method, thisarg, ...args) => Object.getPrototypeOf(constructor).prototype[method]?.apply(thisarg, args);\r\n' \
+    'const WebRTCPeerConnection = Inherits(function constructor(signaler, dest, target) {\r\n' \
+    '  dest = encodeURIComponent(dest);\r\n' \
+    '  if (dest == signaler.name || ! signaler.peers.has(dest) || signaler.connections.has(dest)) {return Null;}\r\n' \
+    '  const connection = SuperBuiltinConstructor(this, new.target, target, constructor, signaler.config);\r\n' \
+    '  connection.signaler = signaler;\r\n' \
+    '  signaler.connections.set(dest, connection);\r\n' \
+    '  connection.dest = dest;\r\n' \
+    '  connection.polite = signaler.name < dest;\r\n' \
+    '  connection.processingoffer = false;\r\n' \
+    '  connection.processinganswer = false;\r\n' \
+    '  connection.onnegotiationneeded = connection.onnegotiationneededhandler;\r\n' \
+    '  connection.onicecandidate = connection.onicecandidatehandler;\r\n' \
+    '  connection.onconnectionstatechange = connection.onconnectionstatechangehandler;\r\n' \
+    '  connection.ondatachannel = connection.ondatachannelhandler;\r\n' \
+    '  connection.ontrack = connection.ontrackhandler;\r\n' \
+    '  return connection;\r\n' \
+    '}, RTCPeerConnection);\r\n' \
+    'WebRTCPeerConnection.prototype.onnegotiationneededhandler = function () {\r\n' \
+    '  this.processingoffer = true;\r\n' \
+    '  this.setLocalDescription().then((function () {\r\n' \
+    '    this.signaler.sendto(this.localDescription, this.dest);\r\n' \
+    '  }).bind(this)).catch(() => null).finally((function () {this.processingoffer=false;}).bind(this));\r\n' \
+    '};\r\n' \
+    'WebRTCPeerConnection.prototype.onicecandidatehandler = function ({candidate}) {\r\n' \
+    '  if (candidate) {this.signaler.sendto(candidate, this.dest);}\r\n' \
+    '};\r\n' \
+    'WebRTCPeerConnection.prototype.onconnectionstatechangehandler = function () {\r\n' \
+    '  this.signaler.onconnectionstatechangehandler?.call(this, this.connectionState);\r\n' \
+    '};\r\n' \
+    'WebRTCPeerConnection.prototype.ondatachannelhandler = function ({channel}) {\r\n' \
+    '  this.signaler.onconnectiondatachannelhandler?.call(this, channel);\r\n' \
+    '};\r\n' \
+    'WebRTCPeerConnection.prototype.ontrackhandler = function ({tracks, streams}) {\r\n' \
+    '  this.signaler.onconnectiontrackhandler?.call(this, tracks, streams);\r\n' \
+    '};\r\n' \
+    'WebRTCPeerConnection.prototype.close = function () {\r\n' \
+    '  SuperMethod(WebRTCPeerConnection, "close", this);\r\n' \
+    '  this.signaler.connections.delete(this.dest);\r\n' \
+    '};\r\n' \
+    'Object.defineProperty(WebRTCPeerConnection.prototype, "infos", {get() {\r\n' \
+    '  const l = this.sctp?.transport?.iceTransport?.getSelectedCandidatePair?.()?.local;\r\n' \
+    '  return l == undefined ? null : {type: l.type, protocol: l.protocol, address: `${l.address}:${l.port}`};\r\n' \
+    '}});\r\n' \
+    'Object.defineProperty(WebRTCPeerConnection.prototype, "infos2", {get() {;\r\n' \
+    '  return this.getStats().then(function (stats) {;\r\n' \
+    '    const l = stats?.get(stats.values().find(({type, selected}) => type == "candidate-pair" && selected)?.localCandidateId);\r\n' \
+    '    return l == undefined ? null : {type: l.candidateType, protocol: l.protocol, address: `${l.address}:${l.port}`};\r\n' \
+    '  });\r\n' \
+    '}});\r\n' \
+    'const WebRTCSignaler = Inherits(function constructor(path, name, config, target) {\r\n' \
+    '  if (! name) {return Null;}\r\n' \
+    '  const url = new URL(path.indexOf(":") >= 0 ? path : "ws://" + path);\r\n' \
+    '  if (url.pathname == "/") {url.pathname = "/signaling";}\r\n' \
+    '  name = encodeURIComponent(name);\r\n' \
+    '  url.search = "?" + name;\r\n' \
+    '  const signaler = SuperBuiltinConstructor(this, new.target, target, constructor, url.href);\r\n' \
+    '  signaler.name = name;\r\n' \
+    '  signaler.config = config;\r\n' \
+    '  signaler.peers = new Set();\r\n' \
+    '  signaler.connections = new Map();\r\n' \
+    '  signaler.onopen = signaler.onopenhandler;\r\n' \
+    '  signaler.onmessage = signaler.onmessagehandler;\r\n' \
+    '  signaler.onerror = signaler.onerrorhandler;\r\n' \
+    '  signaler.onclose = signaler.onclosehandler;\r\n' \
+    '  signaler.onpeeradd = signaler.onpeeraddhandler;\r\n' \
+    '  signaler.onpeerremove = signaler.onpeerremovehandler;\r\n' \
+    '  return signaler;\r\n' \
+    '}, WebSocket);\r\n' \
+    'WebRTCSignaler.prototype.conconstr = WebRTCPeerConnection;\r\n' \
+    'WebRTCSignaler.prototype.sendto = function(data, dest) {\r\n' \
+    '  this.send(`${dest}:${this.name}:${JSON.stringify(data)}`);\r\n' \
+    '};\r\n' \
+    'WebRTCSignaler.prototype.onopenhandler = null;\r\n' \
+    'WebRTCSignaler.prototype.onmessagehandler = function ({data}) {\r\n' \
+    '  const p = data.indexOf(":");\r\n' \
+    '  if (p == 0) {\r\n' \
+    '    const name = data.slice(1, -2);\r\n' \
+    '    if (data.slice(-1) == "0") {\r\n' \
+    '      this.peers.delete(encodeURIComponent(name));\r\n' \
+    '      this.onpeerremove?.(name);\r\n' \
+    '    } else {\r\n' \
+    '      this.peers.add(encodeURIComponent(name));\r\n' \
+    '      this.onpeeradd?.(name);\r\n' \
+    '    }\r\n' \
+    '  } else if (p > 0) {\r\n' \
+    '    const sender = data.substring(0, p);\r\n' \
+    '    const msg = JSON.parse(data.substring(p + 1));\r\n' \
+    '    if ("type" in msg) {\r\n' \
+    '      if (msg.type == "offer") {\r\n' \
+    '        const connection = this.connections.get(sender) ?? this.connection(decodeURIComponent(sender));\r\n' \
+    '        if (! connection || (! connection.polite && (connection.processingoffer || ! (connection.signalingState == "stable" || connection.processinganswer)))) {return;}\r\n' \
+    '        connection.setRemoteDescription(msg).then(connection.setLocalDescription.bind(connection)).then(function () {\r\n' \
+    '          connection.signaler.sendto(connection.localDescription, sender);\r\n' \
+    '        }).catch(() => null);\r\n' \
+    '      } else {\r\n' \
+    '        const connection = this.connections.get(sender);\r\n' \
+    '        if (! connection) {return;}\r\n' \
+    '        connection.processinganswer = msg.type == "answer";\r\n' \
+    '        connection.setRemoteDescription(msg).catch(() => null).finally((function () {this.processinganswer=false;}).bind(this));\r\n' \
+    '      }\r\n' \
+    '    } else if ("candidate" in msg)  {\r\n' \
+    '      this.connections.get(sender)?.addIceCandidate(msg).catch(() => null);\r\n' \
+    '    }\r\n' \
+    '  }\r\n' \
+    '};\r\n' \
+    'WebRTCSignaler.prototype.onerrorhandler = WebRTCSignaler.prototype.onclosehandler = function () {\r\n' \
+    '  this.peers.clear();\r\n' \
+    '};\r\n' \
+    'WebRTCSignaler.prototype.onpeeraddhandler = WebRTCSignaler.prototype.onpeerremovehandler = null;\r\n' \
+    'WebRTCSignaler.prototype.connection = function (dest) {\r\n' \
+    '  const connection = this.conconstr(this, dest);\r\n' \
+    '  return connection == Null ? null : connection;\r\n' \
+    '};\r\n' \
+    .encode('utf-8')
+
+  def connected_callback(self):
+    super().connected_callback()
+    self.text_message_only = True
+    name = urllib.parse.unquote(self.path.partition('?')[2])
+    if self.channel.register_peer(name, self):
+      self.name = name
+    else:
+      self.name = None
+      self.close('unavailable')
+
+  def received_callback(self, id, data):
+    dest, data = data.partition(':')[::2]
+    self.channel.forward(urllib.parse.unquote(dest), data)
+
+  def closed_callback(self):
+    super().closed_callback()
+    self.channel.unregister_peer(self.name)
+
+  def handle_other(self, req):
+    err = resp = rbody = None
+    cresp = \
+      'Date: %s\r\n' \
+      'Server: SocketTB\r\n' \
+      'Access-Control-Allow-Origin: %s\r\n' \
+      'Access-Control-Expose-Headers: *\r\n' \
+      'Access-Control-Allow-Headers: Authorization\r\n' \
+      'Access-Control-Allow-Credentials: true\r\n' \
+      'Connection: close\r\n' % (email.utils.formatdate(time.time(), usegmt=True), req.header('Origin', '*'))
+    if req.method == 'OPTIONS':
+      resp = \
+        'HTTP/1.1 200 OK\r\n' \
+        'Content-Length: 0\r\n' \
+        '%s' \
+        'Allow: OPTIONS, HEAD, GET\r\n' \
+        '\r\n' % cresp
+    elif req.method in {'GET', 'HEAD'}:
+      if req.path.lower() == '/script.js':
+        rbody = self.__class__.WebRTCScript
+        resp = \
+          'HTTP/1.1 200 OK\r\n' \
+          'Content-Length: %d\r\n' \
+          '%s' \
+          'Content-Type: text/javascript\r\n' \
+          '\r\n' % (len(rbody), cresp)
+      elif req.path.lower().startswith('/channel?'):
+        if self.server.basic_auth:
+          cred = req.header('Authorization', '').partition(' ')
+          cred = cred[2].strip() if cred[0].lower() == 'basic' else ''
+          name = ('/' + req.path[9:].strip('/')).rstrip('/') + '/'
+          if (r := self.server.basic_auth(name, self)) is None:
+            err = '404 Not found'
+          elif cred:
+            if self.server.basic_auth(name, self, cred.encode('utf-8'), 1):
+              rbody = r.encode('utf-8')
+              resp = \
+               'HTTP/1.1 200 OK\r\n' \
+               'Content-Length: %d\r\n' \
+               '%s' \
+               'Content-Type: text/plain\r\n' \
+               '\r\n' % (len(rbody), cresp)
+            else:
+              err = '403 Forbidden'
+          else:
+            resp = \
+              'HTTP/1.1 401 Unauthorized\r\n' \
+              'Content-Length: 0\r\n' \
+              '%s' \
+              'WWW-Authenticate: Basic realm="%s", charset="UTF-8"\r\n' \
+              '\r\n' % (cresp, name.strip('/'))
+        else:
+          err = '404 Not found'
+      else:
+        err = '404 Not found'
+    else:
+      err = '501 Not implemented'
+    if err:
+      resp = \
+        'HTTP/1.1 %s\r\n' \
+        'Content-Length: 0\r\n' \
+        '%s' \
+        '\r\n' % (err, cresp)
+    try:
+      self.request.sendall(resp.encode('ISO-8859-1'))
+      if rbody is not None and req.method != 'HEAD':
+        self.request.sendall(rbody)
+    except:
+      pass
+
+
+class WebRTCSignalingServer(WebSocketIDServer):
+
+  def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=128, daemon_thread=False, inactive_maxtime=180, nssl_context=None, basic_auth=None):
+    super().__init__(server_address, request_handler_class=WebRTCSignalingRequestHandler, allow_reuse_address=allow_reuse_address, dual_stack=dual_stack, request_queue_size=request_queue_size, daemon_thread=daemon_thread, inactive_maxtime=inactive_maxtime, nssl_context=nssl_context)
+    self.basic_auth = basic_auth
+
+  def _get_path(self, path_name=''):
+    if self.basic_auth:
+      return None if (path := self.basic_auth(('/' + path_name.strip('/')).rstrip('/').lower() + '/', None)) is None else ('signaling;' + path)
+    else:
+      return path_name or 'signaling'
+
+  def open(self, path_name=''):
+    with self.lock:
+      if self.closed or (path := self._get_path(path_name)) is None:
+        return False
+      channel = WebRTCSignalingServerChannel(path)
+      return self.channels.setdefault(path, channel) is channel
+
+  def close(self, path_name='', timeout=None, block_on_close=False):
+    return False if (path := self._get_path(path_name)) is None else super().close(path, data=b'end', once_data_sent=True, timeout=timeout, block_on_close=block_on_close)
+
+
+class WebRTCBasicAuthenticator(HTTPBasicAuthenticator):
+
+  CODE = lambda: os.urandom(18)
+
+  def set_channel(self, name='', add=True):
+    name = ('/' + name.strip('/')).rstrip('/').lower() + '/'
+    if add:
+      self.realms[name] = (code := base64.urlsafe_b64encode(self.__class__.CODE()).decode('utf-8'))
+      return code
+    else:
+      return bool(self.realms.pop(name, None))
+
+  def set_realm(self, path='/', name=''):
+    raise NotImplementedError()
+
+  def set_credential(self, user, password, name=''):
+    name = ('/' + name.strip('/')).rstrip('/').lower() + '/'
+    if (realm := self.realms.get(name)) is None:
+      return False
+    if password is None:
+      return bool(self.credentials.pop((user, realm), None))
+    else:
+      self.credentials[(user, realm)] = ((salt := self.__class__.SALT()), self.__class__.CRYPT(base64.b64encode(('%s:%s' % (user, password)).encode('utf-8')), salt), 1)
+      return True
 
 
 class HTTPIDownload(_MimeTypes):
