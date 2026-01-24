@@ -5231,13 +5231,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '  const p = data.indexOf(":");\r\n' \
     '  if (p == 0) {\r\n' \
     '    const name = data.slice(1, -2);\r\n' \
-    '    if (data.slice(-1) == "0") {\r\n' \
-    '      this.peers.delete(encodeURIComponent(name));\r\n' \
-    '      this.onpeerremove?.(name);\r\n' \
-    '    } else {\r\n' \
-    '      this.peers.add(encodeURIComponent(name));\r\n' \
-    '      this.onpeeradd?.(name);\r\n' \
-    '    }\r\n' \
+    '    this[data.slice(-1) == "0" ? "onpeerremove" : "onpeeradd"]?.(name);\r\n' \
     '  } else if (p > 0) {\r\n' \
     '    const sender = data.substring(0, p);\r\n' \
     '    const msg = JSON.parse(data.substring(p + 1));\r\n' \
@@ -5262,7 +5256,12 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     'WebRTCSignaler.prototype.onerrorhandler = WebRTCSignaler.prototype.onclosehandler = function () {\r\n' \
     '  this.peers.clear();\r\n' \
     '};\r\n' \
-    'WebRTCSignaler.prototype.onpeeraddhandler = WebRTCSignaler.prototype.onpeerremovehandler = null;\r\n' \
+    'WebRTCSignaler.prototype.onpeeraddhandler = function (name) {\r\n' \
+    '  this.peers.add(encodeURIComponent(name));\r\n' \
+    '};\r\n' \
+    'WebRTCSignaler.prototype.onpeerremovehandler = function (name) {\r\n' \
+    '  this.peers.delete(encodeURIComponent(name));\r\n' \
+    '};\r\n' \
     'WebRTCSignaler.prototype.connection = function (dest) {\r\n' \
     '  const connection = this.conconstr(this, dest);\r\n' \
     '  return connection == Null ? null : connection;\r\n' \
