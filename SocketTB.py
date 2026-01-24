@@ -5186,8 +5186,8 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     'WebRTCPeerConnection.prototype.ondatachannelhandler = function ({channel}) {\r\n' \
     '  this.signaler.onconnectiondatachannelhandler?.call(this, channel);\r\n' \
     '};\r\n' \
-    'WebRTCPeerConnection.prototype.ontrackhandler = function ({tracks, streams}) {\r\n' \
-    '  this.signaler.onconnectiontrackhandler?.call(this, tracks, streams);\r\n' \
+    'WebRTCPeerConnection.prototype.ontrackhandler = function ({track, streams}) {\r\n' \
+    '  this.signaler.onconnectiontrackhandler?.call(this, track, streams);\r\n' \
     '};\r\n' \
     'WebRTCPeerConnection.prototype.close = function () {\r\n' \
     '  SuperMethod(WebRTCPeerConnection, "close", this);\r\n' \
