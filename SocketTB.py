@@ -5266,6 +5266,17 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '  const connection = this.conconstr(this, dest);\r\n' \
     '  return connection == Null ? null : connection;\r\n' \
     '};\r\n' \
+    'WebRTCSignaler.acquire = function (path, channel, name, password, user) {\r\n' \
+    '  const url = new URL(path.indexOf(":") >= 0 ? path : "http://" + path);\r\n' \
+    '  url.pathname = `${url.pathname}${url.pathname.endsWith("/") ? "" : "/"}channel`;\r\n' \
+    '  url.search = "?" + channel;\r\n' \
+    '  return fetch(url, {mode: "cors", credentials: "include", headers: {Authorization: "Basic " + btoa(`${user ?? name}:${password}`)}}).then((response) => response.ok ? response.text() : null, () => null).then((function (code) {\r\n' \
+    '    if (! code) {return Null};\r\n' \
+    '    url.protocol = url.protocol.replace("http", "ws");\r\n' \
+    '    url.pathname = `${url.pathname.slice(-7, 0)}signaling;${code}`;\r\n' \
+    '    return this(url.href, name);r\n' \
+    '  }).bind(this));\r\n' \
+    '};\r\n' \
     .encode('utf-8')
 
   def connected_callback(self):

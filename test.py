@@ -212,7 +212,7 @@ with TOTPassword('AAAAAAAAAAAAAAAA') as totp:
     time.sleep(1)
   print('')
 
-body = \
+body1 = \
   '  <!DOCTYPE h\tml>\r\n' \
   '  <html lang="en">\r\n' \
   '    <head>\r\n' \
@@ -366,9 +366,7 @@ body = \
   '        const server = parent.server;\r\n' \
   '        const name = document.currentScript.id;\r\n' \
   '        var signaler = null;\r\n' \
-  '        fetch(`${server.secure ? "https" : "http"}://${server.address}/channel?test`, {mode: "cors", credentials: "include", headers: {Authorization: "Basic " + btoa(name + ":WebRTC")}}).then((response) => response.ok ? response.text() : null, () => null).then(function (code) {\r\n' \
-  '          if (code) {signaler = WebRTCDataChannelSignaler(`${server.secure ? "wss": "ws"}://${server.address}/signaling;${code}`, `<${name}>`);}\r\n' \
-  '        });\r\n' \
+  '        WebRTCDataChannelSignaler.acquire(`${server.secure ? "https" : "http"}://${server.address}`, "test", `<${name}>`, "WebRTC", name).then(function (server) {signaler = server == Null ? null : server;});\r\n' \
   '      </script>\r\n' \
   '    </head>\r\n' \
   '    <body>\r\n' \
@@ -387,6 +385,143 @@ body = \
   '      </script>\r\n' \
   '    </body>\r\n' \
   '  </html>\r\n' \
+  .encode('utf-8')
+body2 = \
+  '<!DOCTYPE html>\r\n' \
+  '<html lang="en">\r\n' \
+  '  <head>\r\n' \
+  '    <meta charset="utf-8">\r\n' \
+  '    <title>WebRTC DataChannel</title>\r\n' \
+  '    <style>\r\n' \
+  '      body {\r\n' \
+  '        width: 100vw;\r\n' \
+  '        height: 100vh;\r\n' \
+  '        margin:0;\r\n' \
+  '      }\r\n' \
+  '      iframe {\r\n' \
+  '        display: block;\r\n' \
+  '        box-sizing: border-box;\r\n' \
+  '        width: 100%;\r\n' \
+  '        height: 50%;\r\n' \
+  '      };\r\n' \
+  '    </style>\r\n' \
+  '    <style id="style" type="text/css-iframe">\r\n' \
+  '      body {\r\n' \
+  '        margin: 0;\r\n' \
+  '      }\r\n' \
+  '      input {\r\n' \
+  '        width: calc (100vw - 1em);\r\n' \
+  '        height: 2em;\r\n' \
+  '        margin: 0.5em;\r\n' \
+  '        font-size: 1em;\r\n' \
+  '      }\r\n' \
+  '      video {\r\n' \
+  '        display: block;\r\n' \
+  '        margin: 0.5em;\r\n' \
+  '        max-width: calc(100vw - 1em);\r\n' \
+  '        height: calc(100vh - 4em);\r\n' \
+  '      }\r\n' \
+  '    </style>\r\n' \
+  '    <script id="script_e" type="text/js-iframe">\r\n' \
+  '      "use strict";\r\n' \
+  '      const WebRTCMediaStreamSignaler = Inherits(function constructor(path, name, config, target) {\r\n' \
+  '        return SuperDerivedConstructor(this, new.target, target, constructor, path, name, config);\r\n' \
+  '      }, WebRTCSignaler);\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onopenhandler = function () {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onopenhandler", this);\r\n' \
+  '        document.getElementById("file").onchange = this.onvideochangehandler.bind(this);\r\n' \
+  '        document.getElementById("video").onplay = this.onvideoplayhandler.bind(this);\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onerrorhandler = function () {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onerrorhandler", this);\r\n' \
+  '        document.getElementById("file").onchange = null;\r\n' \
+  '        document.getElementById("video").onplay = null;\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onclosehandler = function () {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onclosehandler", this);\r\n' \
+  '        document.getElementById("file").onchange = null;\r\n' \
+  '        document.getElementById("video").onplay = null;\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onpeeraddhandler = function (name) {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onpeeraddhandler", this, name);\r\n' \
+  '        if (name == "r") {;\r\n' \
+  '          document.getElementById("file").disabled = false;\r\n' \
+  '        };\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onpeerremovehandler = function (name) {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onpeerremovehandler", this, name);\r\n' \
+  '        if (name == "r") {;\r\n' \
+  '          document.getElementById("file").disabled = true;\r\n' \
+  '          document.getElementById("video").src = "";\r\n' \
+  '          document.getElementById("video").controls = false;\r\n' \
+  '        };\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onvideochangehandler = function({target: {files: [file]}}) {\r\n' \
+  '        const connection = this.connections.get("r");\r\n' \
+  '        if (connection) {\r\n' \
+  '          connection.getSenders().forEach(function (sender) {connection.removeTrack(sender);});\r\n' \
+  '        }\r\n' \
+  '        document.getElementById("video").src = URL.createObjectURL(file);\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onvideoplayhandler = function ({target: video}) {\r\n' \
+  '        const connection = this.connections.get("r") ?? this.connection("r");\r\n' \
+  '        if (! connection || connection.getSenders().filter(({track}) => track?.readyState == "live").length) {return;}\r\n' \
+  '        video.controls = true;\r\n' \
+  '        const stream = (video.captureStream ?? video.mozCaptureStream).call(video);\r\n' \
+  '        if (video.mozCaptureStream && stream.getAudioTracks().length) {\r\n' \
+  '          const ctx = new AudioContext()\r\n' \
+  '          ctx.createMediaStreamSource(stream).connect(ctx.destination);\r\n' \
+  '        }\r\n' \
+  '        const asenders = connection.getSenders().filter(({track}) => track?.readyState == "ended").values();\r\n' \
+  '        stream.getTracks().forEach(function (track) {\r\n' \
+  '          const sender = asenders.next().value;\r\n' \
+  '          if (sender) {\r\n' \
+  '            sender.replaceTrack(track);\r\n' \
+  '          } else {\r\n' \
+  '            connection.addTrack(track, stream);\r\n' \
+  '          }\r\n' \
+  '        });\r\n' \
+  '      };\r\n' \
+  '      const server = parent.server;\r\n' \
+  '      var signaler = null;\r\n' \
+  '      WebRTCMediaStreamSignaler.acquire(`${server.secure ? "https" : "http"}://${server.address}`, "test", "e", "WebRTC").then(function (server) {signaler = server == Null ? null : server;});\r\n' \
+  '    </script>\r\n' \
+  '    <script id="script_r" type="text/js-iframe">\r\n' \
+  '      "use strict";\r\n' \
+  '      const WebRTCMediaStreamSignaler = Inherits(function constructor(path, name, config, target) {\r\n' \
+  '        return SuperDerivedConstructor(this, new.target, target, constructor, path, name, config);\r\n' \
+  '      }, WebRTCSignaler);\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onpeerremovehandler = function (name) {\r\n' \
+  '        SuperMethod(WebRTCMediaStreamSignaler, "onpeerremovehandler", this, name);\r\n' \
+  '        if (name == "e") {;\r\n' \
+  '          document.getElementById("video").srcObject = null;\r\n' \
+  '        };\r\n' \
+  '      };\r\n' \
+  '      WebRTCMediaStreamSignaler.prototype.onconnectiontrackhandler = function (track, [stream]) {\r\n' \
+  '        document.getElementById("video").srcObject = stream;\r\n' \
+  '      };\r\n' \
+  '      const server = parent.server;\r\n' \
+  '      var signaler = null;\r\n' \
+  '      WebRTCMediaStreamSignaler.acquire(`${server.secure ? "https" : "http"}://${server.address}`, "test", "r", "WebRTC").then(function (server) {signaler = server == Null ? null : server;});\r\n' \
+  '    </script>\r\n' \
+  '  </head>\r\n' \
+  '  <body>\r\n' \
+  '    <iframe id="frame_e"></iframe>\r\n' \
+  '    <iframe id="frame_r"></iframe>\r\n' \
+  '    <script>\r\n' \
+  '      var server = {address: "192.168.1.12:9000", secure: location.protocol.endsWith("s:")};\r\n' \
+  '      const url_script_e = URL.createObjectURL(new Blob([document.getElementById("script_e").textContent],{type: "text/javascript"}));\r\n' \
+  '      const url_script_r = URL.createObjectURL(new Blob([document.getElementById("script_r").textContent],{type: "text/javascript"}));\r\n' \
+  '      const url_style = URL.createObjectURL(new Blob([document.getElementById("style").textContent],{type: "text/css"}));\r\n' \
+  '      const frame_e = document.getElementById("frame_e");\r\n' \
+  '      frame_e.srcdoc = `\\<link rel="stylesheet" href="${url_style}"/\\>\\<script src="${server.secure ? "https" : "http"}://${server.address}/script.js" onerror="window.stop()"\\>\\</script\\>\\<input type="file" id="file" name="file" accept="video/*" disabled\\>\\<video id="video" playsinline autoplay onload="URL.revokeObjectURL(this.src)"\\>\\</video\\>\\<script src="${url_script_e}"\\>\\</script\\>`;\r\n' \
+  '      frame_e.onload = function () {URL.revokeObjectURL(url_script_e);};\r\n' \
+  '      const frame_r = document.getElementById("frame_r");\r\n' \
+  '      frame_r.srcdoc = `\\<link rel="stylesheet" href="${url_style}"/\\>\\<script src="${server.secure ? "https" : "http"}://${server.address}/script.js" onerror="window.stop()"\\>\\</script\\>\\<video id="video" playsinline autoplay\\>\\</video\\>\\<script src="${url_script_r}"\\>\\</script\\>`;\r\n' \
+  '      frame_r.onload = function () {URL.revokeObjectURL(url_script_r);};\r\n' \
+  '    </script>\r\n' \
+  '  </body>\r\n' \
+  '</html>\r\n' \
   .encode('utf-8')
 class TestRequestHandler(RequestHandler):
   def handle(self):
@@ -408,18 +543,19 @@ class TestRequestHandler(RequestHandler):
       self.request.sendall(body)
 BA = WebRTCBasicAuthenticator()
 code = BA.set_channel('test')
-for n in 'ABC':
+for n in 'ABCer':
   BA.set_credential(n, 'WebRTC', 'test')
-with WebRTCSignalingServer(9000, basic_auth=BA) as SignalingServer, TCPIServer(9001, TestRequestHandler, threaded=True):
-  SignalingServer.open('test')
-  print('http://127.0.0.1:9001/page.html')
-  webbrowser.open('http://127.0.0.1:9001/page.html')
-  print('Press "S" to stop...')
-  while True:
-    k = msvcrt.getch()
-    if k == b'\xe0':
+for body in (body1, body2):
+  with WebRTCSignalingServer(9000, basic_auth=BA) as SignalingServer, TCPIServer(9001, TestRequestHandler, threaded=True):
+    SignalingServer.open('test')
+    print('http://127.0.0.1:9001/page.html')
+    webbrowser.open('http://127.0.0.1:9001/page.html')
+    print('Press "S" to stop...')
+    while True:
       k = msvcrt.getch()
-      k = b''
-    if k.upper() == b'S':
-      break
-  SignalingServer.close('test')
+      if k == b'\xe0':
+        k = msvcrt.getch()
+        k = b''
+      if k.upper() == b'S':
+        break
+    SignalingServer.close('test')
