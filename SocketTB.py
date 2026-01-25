@@ -5224,7 +5224,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '}, WebSocket);\r\n' \
     'WebRTCSignaler.prototype.conconstr = WebRTCPeerConnection;\r\n' \
     'WebRTCSignaler.prototype.sendto = function(data, dest) {\r\n' \
-    '  this.send(`${dest}:${this.name}:${JSON.stringify(data)}`);\r\n' \
+    '  this.send(`${dest}:${JSON.stringify(data)}`);\r\n' \
     '};\r\n' \
     'WebRTCSignaler.prototype.onopenhandler = null;\r\n' \
     'WebRTCSignaler.prototype.onmessagehandler = function ({data}) {\r\n' \
@@ -5271,8 +5271,8 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
   def connected_callback(self):
     super().connected_callback()
     self.text_message_only = True
-    name = urllib.parse.unquote(self.path.partition('?')[2])
-    if self.channel.register_peer(name, self):
+    name = self.path.partition('?')[2]
+    if self.channel.register_peer(urllib.parse.unquote(name), self):
       self.name = name
     else:
       self.name = None
@@ -5280,11 +5280,11 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
 
   def received_callback(self, id, data):
     dest, data = data.partition(':')[::2]
-    self.channel.forward(urllib.parse.unquote(dest), data)
+    self.channel.forward(urllib.parse.unquote(dest), '%s:%s' % (self.name, data))
 
   def closed_callback(self):
     super().closed_callback()
-    self.channel.unregister_peer(self.name)
+    self.channel.unregister_peer(urllib.parse.unquote(self.name))
 
   def handle_other(self, req):
     err = resp = rbody = None
