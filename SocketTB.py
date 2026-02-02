@@ -3314,6 +3314,7 @@ class MixinIDServer:
   CLASS = IDSocketGenerator
 
   def __init_subclass__(cls):
+    cls.idsocketgen = property(lambda self: self.isocketgen)
     if 'multi' in cls.__name__.lower():
       cls.idsockets = property(lambda self: self.isockets)
     else:
@@ -4957,8 +4958,9 @@ class WebSocketIDServer(TCPIDServer):
       pathes = list(self.channels.keys())
     for path in pathes:
       self.close(path, once_data_sent=False, timeout=timeout, block_on_close=False)
-    self.thread.join()
-    self.thread = None
+    if self.thread:
+      self.thread.join()
+      self.thread = None
     rt = None if timeout is None else timeout + t - time.monotonic()
     if block_on_close:
       self._shutdown(rt, True)
@@ -5387,8 +5389,8 @@ class WebRTCSignalingServer(WebSocketIDServer):
       channel = WebRTCSignalingServerChannel(path)
       return self.channels.setdefault(path, channel) is channel
 
-  def close(self, path_name='', timeout=None, block_on_close=False):
-    return False if (path := self._get_path(path_name)) is None else super().close(path, data=b'end', once_data_sent=True, timeout=timeout, block_on_close=block_on_close)
+  def close(self, path_name='', once_data_sent=True, timeout=None, block_on_close=False):
+    return False if (path := self._get_path(path_name)) is None else super().close(path, data=b'end', once_data_sent=once_data_sent, timeout=timeout, block_on_close=block_on_close)
 
 
 class WebRTCBasicAuthenticator(HTTPBasicAuthenticator):
