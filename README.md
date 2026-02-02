@@ -14,10 +14,11 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 11. Interruptible HTTP Server: HTTPIServer [+ HTTPBasicAuthenticator]
 12. Interruptible websocket server: WebSocketIDServer / WebSocketIDAltServer + WebSocketRequestHandler [+ WebSocketDataStore]
 13. Interruptible websocket client: WebSocketIDClient [+ WebSocketDataStore]
-14. Interruptible downloader compatible with proxy: HTTPIDownload, HTTPIListDownload
-15. Interruptible uploader compatible with proxy: HTTPIUpload
-16. Time and offset from NTP Server: NTPClient
-17. Time based One Time Password: TOTPassword
+14. Interruptible WebRTC websocket signaling server: WebRTCSignalingServer + WebRTCBasicAuthenticator
+15. Interruptible downloader compatible with proxy: HTTPIDownload, HTTPIListDownload
+16. Interruptible uploader compatible with proxy: HTTPIUpload
+17. Time and offset from NTP Server: NTPClient
+18. Time based One Time Password: TOTPassword
 
 Usage: from SocketTB import *  
 See test.py for examples and also the IDownload Firefox / Edge extension
