@@ -5278,8 +5278,193 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '    url.pathname = `${url.pathname.slice(-7, 0)}signaling;${code}`;\r\n' \
     '    return this(url.href, name);r\n' \
     '  }).bind(this));\r\n' \
-    '};\r\n' \
-    .encode('utf-8')
+    '};\r\n'
+  StreamDownloadScript = \
+    '"use strict"\r\n' \
+    'if ("ServiceWorkerGlobalScope" in self) {\r\n' \
+    '  self.addEventListener("install", function (e) {e.waitUntil(self.skipWaiting());});\r\n' \
+    '  self.addEventListener("activate", function (e) {e.waitUntil(self.clients.claim());});\r\n' \
+    '  self.downloads = new Map();\r\n' \
+    '  self.addEventListener("fetch", function (e) {\r\n' \
+    '    const url = new URL(e.request.url);\r\n' \
+    '    const path = (new URL(".", url)).pathname\r\n' \
+    '    if ((url.protocol == "http:" || url.protocol == "https:") && path.endsWith("/download/")) {\r\n' \
+    '      const name = url.pathname.substring(path.length);\r\n' \
+    '      const cid = url.searchParams.get("cid");\r\n' \
+    '      const did = parseInt(url.searchParams.get("did"));\r\n' \
+    '      const cdid = `${cid}#${did}`;\r\n' \
+    '      e.respondWith(\r\n' \
+    '        clients.get(cid).then((client) =>\r\n' \
+    '          client ? new Promise(function (resolve, reject) {\r\n' \
+    '            self.downloads.set(cdid, resolve);\r\n' \
+    '            client.postMessage({did});\r\n' \
+    '          }) : null\r\n' \
+    '        ).then((rs) =>\r\n' \
+    '          rs ? new Response(rs, {headers: {"Content-Type": "application/octet-stream", "Content-Disposition": "attachment;filename*=UTF-8\'\'" + name, "Connection": "close"}}) : fetch(e.request).catch(() => new Response())\r\n' \
+    '        )\r\n' \
+    '      );\r\n' \
+    '      e.waitUntil(\r\n' \
+    '        e.handled.then(() =>\r\n' \
+    '          self.downloads.has(cdid) ? new Promise(function (resolve, reject) {\r\n' \
+    '            self.downloads.set(cdid, resolve);\r\n' \
+    '          }) : null\r\n' \
+    '        )\r\n' \
+    '      );\r\n' \
+    '    } else {\r\n' \
+    '      e.respondWith(fetch(e.request).catch(() => new Response()));\r\n' \
+    '    }\r\n' \
+    '  });\r\n' \
+    '  self.addEventListener("message", function ({source, data}) {\r\n' \
+    '    if (data == "ping") {\r\n' \
+    '      source.postMessage("pong");\r\n' \
+    '    } else if (data == "cid") {\r\n' \
+    '      source.postMessage({cid: source.id});\r\n' \
+    '    } else {\r\n' \
+    '      const cdid = `${source.id}#${data.did}`;\r\n' \
+    '      const rs = data.rs;\r\n' \
+    '      self.downloads.get(cdid)?.(rs);\r\n' \
+    '      if (! rs) {self.downloads.delete(cdid);}\r\n' \
+    '    }\r\n' \
+    '  });\r\n' \
+    '} else {\r\n' \
+    '  const src = new URL(document.currentScript.src);\r\n' \
+    '  src.pathname = src.pathname.slice(0, -2) + "html";\r\n' \
+    '  if (src.href == location.href) {\r\n' \
+    '    self.DownloaderTransformStream = Inherits(function constructor(did, target) {\r\n' \
+    '      if (! constructor.cid || ! Number.isInteger(did) || constructor.streams.has(did)) {return Null;}\r\n' \
+    '      const stream = SuperBuiltinConstructor(this, new.target, target, constructor);\r\n' \
+    '      stream.did = did;\r\n' \
+    '      constructor.streams.set(did, stream);\r\n' \
+    '      return stream;\r\n' \
+    '    }, TransformStream);\r\n' \
+    '    DownloaderTransformStream.streams = new Map();\r\n' \
+    '    DownloaderTransformStream.ready = new Promise(function (resolve, reject) {\r\n' \
+    '      navigator.serviceWorker.register(document.currentScript.src).catch(function (error) {reject(error)});\r\n' \
+    '      navigator.serviceWorker.addEventListener("message", function ({data: {cid, did}}) {\r\n' \
+    '        if (cid) {\r\n' \
+    '          resolve(cid);\r\n' \
+    '          DownloaderTransformStream.cid = cid;\r\n' \
+    '          DownloaderTransformStream.pinging = false;\r\n' \
+    '        } else if (Number.isInteger(did)) {\r\n' \
+    '          const rs = DownloaderTransformStream.streams.get(did)?.readable;\r\n' \
+    '          if (rs) {\r\n' \
+    '            DownloaderTransformStream.sworker.postMessage({did, rs}, [rs]);\r\n' \
+    '            DownloaderTransformStream.ping();\r\n' \
+    '          }\r\n' \
+    '        }\r\n' \
+    '      });\r\n' \
+    '      navigator.serviceWorker.ready.then(function (registration) {\r\n' \
+    '        DownloaderTransformStream.sworker = registration.active;\r\n' \
+    '        DownloaderTransformStream.sworker.postMessage("cid");\r\n' \
+    '      });\r\n' \
+    '    });\r\n' \
+    '    DownloaderTransformStream.ping = function ping(rep=false) {\r\n' \
+    '      if (DownloaderTransformStream.streams.size) {\r\n' \
+    '        if (rep || ! DownloaderTransformStream.pinging) {\r\n' \
+    '          DownloaderTransformStream.pinging = true;\r\n' \
+    '          DownloaderTransformStream.sworker.postMessage("ping");\r\n' \
+    '          setTimeout(ping, 15000, true);\r\n' \
+    '        }\r\n' \
+    '      } else {\r\n' \
+    '        DownloaderTransformStream.pinging = false;\r\n' \
+    '      }\r\n' \
+    '    }\r\n' \
+    '    DownloaderTransformStream.stop = function (did) {\r\n' \
+    '      if (DownloaderTransformStream.streams.delete(did)) {\r\n' \
+    '        DownloaderTransformStream.sworker.postMessage({did});\r\n' \
+    '      }\r\n' \
+    '    }\r\n' \
+    '    DownloaderTransformStream.prototype.stop = function () {\r\n' \
+    '      DownloaderTransformStream.stop(this.did);\r\n' \
+    '    };\r\n' \
+    '  } else {\r\n' \
+    '    self.StreamDownloader = Inherits(function constructor(target) {\r\n' \
+    '      const downloader = SuperBuiltinConstructor(this, new.target, target, constructor);\r\n' \
+    '      const did = constructor.ndid++;\r\n' \
+    '      downloader.did = did;\r\n' \
+    '      constructor.downloaders.set(did, downloader);\r\n' \
+    '      downloader.queue = new Promise(function (resolve, reject) {downloader.ready = resolve;});\r\n' \
+    '      downloader.status = 0;\r\n' \
+    '      constructor.iframe.contentWindow.postMessage({cmd: "spawn", did}, src.origin);\r\n' \
+    '      return downloader;\r\n' \
+    '    }, Object);\r\n' \
+    '    StreamDownloader.ndid = 0;\r\n' \
+    '    StreamDownloader.downloaders = new Map();\r\n' \
+    '    StreamDownloader.ready = new Promise(function (resolve, reject) {\r\n' \
+    '      const iframe = document.createElement("iframe");\r\n' \
+    '      StreamDownloader.iframe = iframe;\r\n' \
+    '      iframe.src = src.href;\r\n' \
+    '      iframe.style.display = "none";\r\n' \
+    '      document.body.appendChild(iframe);\r\n' \
+    '      self.addEventListener("message", function ({source, data: {cid, did, ws}}) {\r\n' \
+    '        if (source != iframe.contentWindow) {return;}\r\n' \
+    '        if (cid) {\r\n' \
+    '          StreamDownloader.cid = cid;\r\n' \
+    '          StreamDownloader.target = "StreamDownload" + cid;\r\n' \
+    '          resolve(cid);\r\n' \
+    '        } else if (ws) {\r\n' \
+    '          const downloader = StreamDownloader.downloaders.get(did);\r\n' \
+    '          if (! downloader) {return;}\r\n' \
+    '          downloader.writer = ws.getWriter();\r\n' \
+    '          downloader.ready();\r\n' \
+    '        } else {\r\n' \
+    '          StreamDownloader.downloaders.delete(did);\r\n' \
+    '        }\r\n' \
+    '      });\r\n' \
+    '    });\r\n' \
+    '    StreamDownloader.prototype.write = function (chunk) {\r\n' \
+    '      if (this.status != 1) {return;}\r\n' \
+    '      return this.queue = Promise.all([chunk, this.queue]).then(([chunk]) => this.writer.write(chunk));\r\n' \
+    '    };\r\n' \
+    '    StreamDownloader.prototype.stop = function () {\r\n' \
+    '      if (this.status == 2) {return;}\r\n' \
+    '      this.status = 2;\r\n' \
+    '      return this.queue = this.queue.then(() => this.writer.close()).finally(() => StreamDownloader.iframe.contentWindow.postMessage({cmd: "stop", did: this.did}, src.origin));\r\n' \
+    '    };\r\n' \
+    '    StreamDownloader.prototype.download = function (name) {\r\n' \
+    '      if (this.status != 0) {return;}\r\n' \
+    '      this.status = 1;\r\n' \
+    '      return this.queue = this.queue.then(() => open(new URL(`download/${encodeURIComponent(name)}?cid=${StreamDownloader.cid}&did=${this.did}`, src), StreamDownloader.target));\r\n' \
+    '    };\r\n' \
+    '    Object.defineProperty(StreamDownloader, "latest", {get() {return StreamDownloader.downloaders.get(StreamDownloader.ndid - 1);}});\r\n' \
+    '    onbeforeunload = function () {\r\n' \
+    '      StreamDownloader.downloaders.forEach((downloader) => downloader.stop());\r\n' \
+    '    };\r\n' \
+    '  }\r\n' \
+    '}\r\n'
+  StreamDownloadIframe = \
+    '<!DOCTYPE html>\r\n' \
+    '<html lang="en">\r\n' \
+    '  <head>\r\n' \
+    '    <meta charset="utf-8">\r\n' \
+    '    <title>Stream downloader</title>\r\n' \
+    '    <script id="script" src="http://127.0.0.1:9000/script.js" onerror="window.stop()"></script>\r\n' \
+    '    <script id="sd" src="streamdownload.js" onerror="window.stop()"></script>\r\n' \
+    '  </head>\r\n' \
+    '  <body>\r\n' \
+    '    <iframe style="display:none;"></iframe>\r\n' \
+    '    <script>\r\n' \
+    '      "use strict";\r\n' \
+    '      const origin = location.ancestorOrigins?.[0] ?? "*";\r\n' \
+    '      DownloaderTransformStream.ready.then(function (cid) {\r\n' \
+    '        document.body.firstElementChild.contentWindow.name = "StreamDownload" + cid;\r\n' \
+    '        parent.postMessage({cid}, origin);\r\n' \
+    '      });\r\n' \
+    '      self.addEventListener("message", function ({source, data: {cmd, did}}) {\r\n' \
+    '        if (parent != source) {return;}\r\n' \
+    '        if (cmd == "spawn") {\r\n' \
+    '          DownloaderTransformStream.ready.then(function () {\r\n' \
+    '            const ws = DownloaderTransformStream(did).writable;\r\n' \
+    '            parent.postMessage({did, ws}, origin, [ws]);\r\n' \
+    '          });\r\n' \
+    '        } else if (cmd == "stop") {\r\n' \
+    '          DownloaderTransformStream.stop(did);\r\n' \
+    '          parent.postMessage({did}, origin);\r\n' \
+    '        }\r\n' \
+    '      });\r\n' \
+    '    </script>\r\n' \
+    '  </body>\r\n' \
+    '</html>\r\n'
 
   def connected_callback(self):
     super().connected_callback()
@@ -5318,6 +5503,8 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
         '\r\n' % cresp
     elif req.method in {'GET', 'HEAD'}:
       if req.path.lower() == '/script.js':
+        if isinstance(self.__class__.WebRTCScript, str):
+          self.__class__.WebRTCScript = self.__class__.WebRTCScript.encode('utf-8')
         rbody = self.__class__.WebRTCScript
         resp = \
           'HTTP/1.1 200 OK\r\n' \
@@ -5325,6 +5512,24 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
           '%s' \
           'Content-Type: text/javascript\r\n' \
           '\r\n' % (len(rbody), cresp)
+      elif req.path.lower() == '/streamdownload.js':
+        if isinstance(self.__class__.StreamDownloadScript, str):
+          self.__class__.StreamDownloadScript = self.__class__.StreamDownloadScript.encode('utf-8')
+        rbody = self.__class__.StreamDownloadScript
+        resp = \
+          'HTTP/1.1 200 OK\r\n' \
+          'Content-Length: %d\r\n' \
+          'Content-Type: text/javascript\r\n' \
+          '\r\n' % len(rbody)
+      elif req.path.lower() == '/streamdownload.html':
+        if isinstance(self.__class__.StreamDownloadIframe, str):
+          self.__class__.StreamDownloadIframe = self.__class__.StreamDownloadIframe.encode('utf-8')
+        rbody = self.__class__.StreamDownloadIframe
+        resp = \
+          'HTTP/1.1 200 OK\r\n' \
+          'Content-Length: %d\r\n' \
+          'Content-Type: text/html; charset=utf-8\r\n' \
+          '\r\n' % len(rbody)
       elif req.path.lower().startswith('/channel?'):
         if self.server.basic_auth:
           cred = req.header('Authorization', '').partition(' ')
