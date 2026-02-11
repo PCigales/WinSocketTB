@@ -14,7 +14,7 @@ A module in Python 3 consisting of a toolbox to handle sockets under Windows for
 11. Interruptible HTTP Server: HTTPIServer [+ HTTPBasicAuthenticator]
 12. Interruptible websocket server: WebSocketIDServer / WebSocketIDAltServer + WebSocketRequestHandler [+ WebSocketDataStore]
 13. Interruptible websocket client: WebSocketIDClient [+ WebSocketDataStore]
-14. Interruptible WebRTC websocket signaling server: WebRTCSignalingServer + WebRTCBasicAuthenticator
+14. Interruptible WebRTC websocket signaling and stream download server: WebRTCSignalingServer + WebRTCBasicAuthenticator
 15. Interruptible downloader compatible with proxy: HTTPIDownload, HTTPIListDownload
 16. Interruptible uploader compatible with proxy: HTTPIUpload
 17. Time and offset from NTP Server: NTPClient
