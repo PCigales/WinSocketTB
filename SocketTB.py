@@ -5276,7 +5276,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '    if (! code) {return Null};\r\n' \
     '    url.protocol = url.protocol.replace("http", "ws");\r\n' \
     '    url.pathname = `${url.pathname.slice(-7, 0)}signaling;${code}`;\r\n' \
-    '    return this(url.href, name);r\n' \
+    '    return this(url.href, name);\r\n' \
     '  }).bind(this));\r\n' \
     '};\r\n'
   StreamDownloadScript = \
@@ -5427,9 +5427,9 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '      return this.queue = this.queue.then(() => open(new URL(`download/${encodeURIComponent(name)}?cid=${StreamDownloader.cid}&did=${this.did}`, src), StreamDownloader.target));\r\n' \
     '    };\r\n' \
     '    Object.defineProperty(StreamDownloader, "latest", {get() {return StreamDownloader.downloaders.get(StreamDownloader.ndid - 1);}});\r\n' \
-    '    onbeforeunload = function () {\r\n' \
+    '    self.addEventListener("beforeunload", function () {\r\n' \
     '      StreamDownloader.downloaders.forEach((downloader) => downloader.stop());\r\n' \
-    '    };\r\n' \
+    '    });\r\n' \
     '  }\r\n' \
     '}\r\n'
   StreamDownloadIframe = \
@@ -5438,7 +5438,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '  <head>\r\n' \
     '    <meta charset="utf-8">\r\n' \
     '    <title>Stream downloader</title>\r\n' \
-    '    <script id="script" src="http://127.0.0.1:9000/script.js" onerror="window.stop()"></script>\r\n' \
+    '    <script id="script" src="script.js" onerror="window.stop()"></script>\r\n' \
     '    <script id="sd" src="streamdownload.js" onerror="window.stop()"></script>\r\n' \
     '  </head>\r\n' \
     '  <body>\r\n' \
