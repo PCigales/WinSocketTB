@@ -5269,6 +5269,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '  return connection == Null ? null : connection;\r\n' \
     '};\r\n' \
     'WebRTCSignaler.acquire = function (path, channel, name, password, user) {\r\n' \
+    '  path = path.toString();\r\n' \
     '  const url = new URL(path.indexOf(":") >= 0 ? path : "http://" + path);\r\n' \
     '  url.pathname = `${url.pathname}${url.pathname.endsWith("/") ? "" : "/"}channel`;\r\n' \
     '  url.search = "?" + channel;\r\n' \
@@ -5339,11 +5340,10 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '    }, TransformStream);\r\n' \
     '    DownloaderTransformStream.streams = new Map();\r\n' \
     '    DownloaderTransformStream.ready = new Promise(function (resolve, reject) {\r\n' \
-    '      navigator.serviceWorker.register(document.currentScript.src).catch(function (error) {reject(error)});\r\n' \
     '      navigator.serviceWorker.addEventListener("message", function ({data: {cid, did}}) {\r\n' \
     '        if (cid) {\r\n' \
-    '          resolve(cid);\r\n' \
     '          DownloaderTransformStream.cid = cid;\r\n' \
+    '          resolve(cid);\r\n' \
     '          DownloaderTransformStream.pinging = false;\r\n' \
     '        } else if (Number.isInteger(did)) {\r\n' \
     '          const rs = DownloaderTransformStream.streams.get(did)?.readable;\r\n' \
@@ -5353,11 +5353,12 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '          }\r\n' \
     '        }\r\n' \
     '      });\r\n' \
-    '      navigator.serviceWorker.ready.then(function (registration) {\r\n' \
+    '      Promise.all([navigator.serviceWorker.register(document.currentScript.src + "p"), navigator.serviceWorker.ready]).then(function ([, registration]) {\r\n' \
     '        DownloaderTransformStream.sworker = registration.active;\r\n' \
     '        DownloaderTransformStream.sworker.postMessage("cid");\r\n' \
-    '      });\r\n' \
+    '      }, reject);\r\n' \
     '    });\r\n' \
+    '    DownloaderTransformStream.ready.catch(() => null);\r\n' \
     '    DownloaderTransformStream.ping = function ping(rep=false) {\r\n' \
     '      if (DownloaderTransformStream.streams.size) {\r\n' \
     '        if (rep || ! DownloaderTransformStream.pinging) {\r\n' \
@@ -5396,9 +5397,11 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '      iframe.src = src.href;\r\n' \
     '      iframe.style.display = "none";\r\n' \
     '      document.body.appendChild(iframe);\r\n' \
-    '      self.addEventListener("message", function ({source, data: {cid, did, ws}}) {\r\n' \
+    '      self.addEventListener("message", function ({source, data: {err, cid, did, ws}}) {\r\n' \
     '        if (source != iframe.contentWindow) {return;}\r\n' \
-    '        if (cid) {\r\n' \
+    '        if (err) {\r\n' \
+    '          reject(err);\r\n' \
+    '        } else if (cid) {\r\n' \
     '          StreamDownloader.cid = cid;\r\n' \
     '          StreamDownloader.target = "StreamDownload" + cid;\r\n' \
     '          resolve(cid);\r\n' \
@@ -5412,6 +5415,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '        }\r\n' \
     '      });\r\n' \
     '    });\r\n' \
+    '    StreamDownloader.ready.catch(() => null);\r\n' \
     '    StreamDownloader.prototype.write = function (chunk) {\r\n' \
     '      if (this.status != 1) {return;}\r\n' \
     '      return this.queue = Promise.all([chunk, this.queue]).then(([chunk]) => this.writer.write(chunk));\r\n' \
@@ -5449,14 +5453,14 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '      DownloaderTransformStream.ready.then(function (cid) {\r\n' \
     '        document.body.firstElementChild.contentWindow.name = "StreamDownload" + cid;\r\n' \
     '        parent.postMessage({cid}, origin);\r\n' \
-    '      });\r\n' \
+    '      }, (err) => parent.postMessage({err}, origin));\r\n' \
     '      self.addEventListener("message", function ({source, data: {cmd, did}}) {\r\n' \
     '        if (parent != source) {return;}\r\n' \
     '        if (cmd == "spawn") {\r\n' \
     '          DownloaderTransformStream.ready.then(function () {\r\n' \
     '            const ws = DownloaderTransformStream(did).writable;\r\n' \
     '            parent.postMessage({did, ws}, origin, [ws]);\r\n' \
-    '          });\r\n' \
+    '          }, () => null);\r\n' \
     '        } else if (cmd == "stop") {\r\n' \
     '          DownloaderTransformStream.stop(did);\r\n' \
     '          parent.postMessage({did}, origin);\r\n' \
