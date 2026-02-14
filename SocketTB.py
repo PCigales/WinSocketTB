@@ -5353,7 +5353,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
     '          }\r\n' \
     '        }\r\n' \
     '      });\r\n' \
-    '      Promise.all([navigator.serviceWorker.register(document.currentScript.src + "p"), navigator.serviceWorker.ready]).then(function ([, registration]) {\r\n' \
+    '      Promise.all([navigator.serviceWorker.register(document.currentScript.src), navigator.serviceWorker.ready]).then(function ([, registration]) {\r\n' \
     '        DownloaderTransformStream.sworker = registration.active;\r\n' \
     '        DownloaderTransformStream.sworker.postMessage("cid");\r\n' \
     '      }, reject);\r\n' \
