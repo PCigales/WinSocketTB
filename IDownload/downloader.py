@@ -1,4 +1,4 @@
-# idownload v1.1 (https://github.com/PCigales/WinSocketTB)
+# idownload v1.2 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2025 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 

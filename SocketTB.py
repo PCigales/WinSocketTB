@@ -1,4 +1,4 @@
-# SocketTB v1.4.3 (https://github.com/PCigales/WinSocketTB)
+# SocketTB v1.4.4 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2023 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -5579,7 +5579,7 @@ class WebRTCSignalingRequestHandler(WebSocketRequestHandler):
       pass
 
 
-class WebRTCSignalingServer(WebSocketIDServer):
+class WebRTCSignalingServer(WebSocketIDAltServer):
 
   def __init__(self, server_address, allow_reuse_address=False, dual_stack=True, request_queue_size=128, daemon_thread=False, inactive_maxtime=180, nssl_context=None, basic_auth=None):
     super().__init__(server_address, request_handler_class=WebRTCSignalingRequestHandler, allow_reuse_address=allow_reuse_address, dual_stack=dual_stack, request_queue_size=request_queue_size, daemon_thread=daemon_thread, inactive_maxtime=inactive_maxtime, nssl_context=nssl_context)
@@ -5718,12 +5718,22 @@ class HTTPIDownload(_MimeTypes):
     self._threads = []
     self._lock = threading.Lock()
     self._flock = threading.Lock()
+    self._std = None
     return self
 
   @property
   def progress(self):
     with self._progress['eventing']['condition']:
-      return {'status': self._progress['status']} if self._progress['status'] in ('waiting', 'starting') else ({**{k: v for k, v in self._progress.items() if k != 'eventing'}, 'sections': sorted((sec for work in self._progress['workers'] for sec in work), key=lambda sec: sec['start'])} if hasattr(self, '_condition') else {k: v for k, v in self._progress.items() if k not in ('workers', 'eventing')})
+      if self._progress['status'] in ('waiting', 'starting'):
+        return {'status': self._progress['status']}
+      if hasattr(self, '_condition'):
+        prog = {k: v for k, v in self._progress.items() if k != 'eventing'}
+        prog['sections'] = sorted((sec for work in self._progress['workers'] for sec in work), key=lambda sec: sec['start'])
+      else:
+        prog = {k: v for k, v in self._progress.items() if k not in ('workers', 'eventing')}
+      if self._progress['status'].startswith('working') and self._std and self._progress['downloaded'] > self._std[1]:
+        prog['estimation'] = math.ceil((self._progress['size'] - self._progress['downloaded']) / (self._progress['downloaded'] - self._std[1]) * (time.time() - self._std[0]))
+      return prog
 
   def _nsection(self, w=None, restart=False):
     if restart:
@@ -5958,15 +5968,14 @@ class HTTPIDownload(_MimeTypes):
               self._progress['downloaded'] += len(b)
               p = self._progress['percent']
               self._progress['percent'] = min(math.floor(self._progress['downloaded'] / self._progress['size'] * 100), 100)
-              if p != self._progress['percent']:
-                self._progress['eventing']['progression'] = True
-                self._progress['eventing']['condition'].notify_all()
+              notif = p != self._progress['percent']
             else:
               d = self._progress['downloaded']
               self._progress['downloaded'] += len(b)
-              if d // self._bsize != self._progress['downloaded'] // self._bsize:
-                self._progress['eventing']['progression'] = True
-                self._progress['eventing']['condition'].notify_all()
+              notif = d // self._bsize != self._progress['downloaded'] // self._bsize
+            if notif:
+              self._progress['eventing']['progression'] = True
+              self._progress['eventing']['condition'].notify_all()
     except:
       if self._req is not None:
         with self._progress['eventing']['condition']:
@@ -6060,7 +6069,10 @@ class HTTPIDownload(_MimeTypes):
         with self._lock:
           if self._req is None:
             return
-          if rep is not None:
+          if rep is None:
+            with self._progress['eventing']['condition']:
+              self._std = (time.time(), self._progress['downloaded'])
+          else:
             th = threading.Thread(target=self._read, args=(0, rep))
             self._threads.append(th)
             self._workers.append([0, size, threading.Semaphore()])
@@ -6074,6 +6086,7 @@ class HTTPIDownload(_MimeTypes):
             if self._file_fz and not self._fill_zero(size):
               self._file_fz = None
             if self._file_fz is not None:
+              self._std = (time.time(), 0)
               th.start()
         if self._file_fz is not None:
           for w in range((0 if rep is None else 1), self._maxworks):
@@ -6098,6 +6111,8 @@ class HTTPIDownload(_MimeTypes):
         if self._file_fz and not self._fill_zero(size):
           self._file_fz = None
         if self._file_fz is not None:
+          if size:
+            self._std = (time.time(), 0)
           th.start()
     if self._file_fz is None:
       with self._progress['eventing']['condition']:
