@@ -61,14 +61,19 @@ browser.action.onClicked.addListener(
 );
 browser.runtime.onMessage.addListener(
   function (message, sender, respond) {
-    get_sid().then(
-      function (sid) {
-        if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {throw null;}
-        if (Object.hasOwn(message, "explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
-        const sdid = message.sdid;
-        return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false, selfclose: true}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (Object.hasOwn(message.progress, "sections") ? message.progress : null)}));
-      }
-    ).catch(() => false).then(respond);
+    if (sender.url == browser.runtime.getURL("options.html")) {
+      get_histopts.histopts = undefined;
+      browser.storage.session.remove("histopts").then(get_histopts).then(respond);
+    } else {
+      get_sid().then(
+        function (sid) {
+          if (sender.url != browser.runtime.getURL(`center.html?sid=${sid}`)) {throw null;}
+          if (Object.hasOwn(message, "explorer")) {return browser.runtime.sendNativeMessage("idownload", message);}
+          const sdid = message.sdid;
+          return Promise.all([browser.storage.local.get({port: 9009, maxsecs: 8, secmin: 1, sparse: false, selfclose: true}), browser.storage.session.get(sdid)]).then(([results1, results2]) => browser.runtime.sendNativeMessage("idownload", {...results1, sdid, ...results2[sdid], progress: (Object.hasOwn(message.progress, "sections") ? message.progress : null)}));
+        }
+      ).catch(() => false).then(respond);
+    }
     return true;
   }
 );
@@ -99,12 +104,13 @@ function get_histopts() {
           return browser.storage.local.get().then(
             function (results) {
               const histopts = [(results.histper ?? 7) , (results.histinco ?? false)];
+              const m = sid - histopts[0] * 86400000;
               const a = {histopts};
               const d = [];
               for (const r of Object.entries(results)) {
                 if (r[0][2] == "_") {
                   const sdid = r[0].substring(3);
-                  if ((! histopts[1] && r[0][1] == "0") || (sid - parseInt(sdid.split('_')) >= histopts[0] * 86400000)) {
+                  if ((! histopts[1] && r[0][1] == "0") || parseInt(sdid.split('_')[0]) <= m) {
                     d.push(r[0]);
                   } else if (r[0][0] == "i") {
                     a[sdid] = r[1];

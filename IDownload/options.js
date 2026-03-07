@@ -14,7 +14,7 @@ function show_msg() {
 }
 function save(event) {
   event?.preventDefault();
-  browser.storage.local.set(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, (i.type.toLowerCase() == "checkbox" ? i.checked : i.valueAsNumber)]))).then(show_msg.bind("saved"), show_msg.bind("not saved"));
+  browser.storage.local.set(Object.fromEntries(Array.prototype.map.call(document.getElementById("form").getElementsByTagName("input"), (i) => [i.id, (i.type.toLowerCase() == "checkbox" ? i.checked : i.valueAsNumber)]))).then(() => browser.runtime.sendMessage("").catch(Boolean).then(show_msg.bind("saved")), show_msg.bind("not saved"));
 }
 function restore(event) {
   event?.preventDefault();

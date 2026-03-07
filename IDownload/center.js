@@ -98,7 +98,7 @@ function send_command() {
   if (progress == null) {return;}
   switch (this.className) {
     case "explorer":
-      browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[1].innerText + (download.className != "completed" ? ".idownload" : "")}).finally(Boolean);
+      browser.runtime.sendMessage({"explorer": download.getElementsByClassName("file")[1].innerText + (download.className != "completed" ? ".idownload" : "")}).catch(Boolean);
       break;
     case "discard":
       if (! window.confirm("Discard the download ?")) {break;}
