@@ -9,16 +9,16 @@ if (! ("browser" in globalThis)) {globalThis.browser = globalThis.chrome;}
 browser.webRequest.onSendHeaders.addListener(
   function (details) {
     url_rid.set(details.url, details.requestId);
-    rid_inf.set(details.requestId, [details.url, details.requestHeaders]);
+    rid_inf.set(details.requestId, [details.url, details.requestHeaders, details.type]);
   },
-  {urls: ["<all_urls>"], types: ["main_frame", "sub_frame", "xmlhttprequest", "image", "imageset", "media", "other"].filter(function (e) {return this.includes(e);}, Object.values(browser.webRequest.ResourceType))},
+  {urls: ["<all_urls>"]},
   ["requestHeaders", "extraHeaders"].filter(function (e) {return this.includes(e);}, Object.values(browser.webRequest.OnSendHeadersOptions))
 );
 browser.downloads.onCreated.addListener(
   function (item) {
     if (! item.filename || item.state != "in_progress") {return;}
     const url = item.finalUrl ?? item.url;
-    const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, []];
+    const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, [], undefined];
     const did = item.id;
     const dinf = {url: inf[0], file: item.filename, headers: inf[1]};
     Promise.all([get_sid(), get_histopts()]).then(
@@ -32,12 +32,16 @@ browser.downloads.onCreated.addListener(
 browser.downloads.onChanged.addListener(
   function (delta) {
     if (! Object.hasOwn(delta, "filename")) {return;}
-    Promise.all([get_sid(), get_histopts(), browser.downloads.search({id: delta.id})]).then(
-      function ([sid, histopts, results]) {
+    Promise.all([get_sid(), get_histopts(), browser.downloads.search({id: delta.id}), browser.storage.local.get({trigsaveas: false})]).then(
+      function ([sid, histopts, results, {trigsaveas}]) {
         if (results.length != 1) {return;}
         const item = results[0];
         const url = item.finalUrl ?? item.url;
-        const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, []];
+        const inf = url_rid.has(url) ? rid_inf.get(url_rid.get(url)) : [url, [], undefined];
+        if (inf[2] == "main_frame" && trigsaveas) {
+          inf[2] = undefined;
+          return;
+        }
         const did = item.id;
         const dinf = {url: inf[0], file: delta.filename.current, headers: inf[1]};
         const sdid = `${sid}_${did}`;
