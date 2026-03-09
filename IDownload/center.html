@@ -13,13 +13,21 @@ This program is licensed under the GNU GPLv3 copyleft license (see https://www.g
     <style type="text/css">
       body {
         position: relative;
+        display: flex;
+        flex-flow: column nowrap;
+        max-height: calc(100dvh - 10px);
         margin: 5px;
         background-color: rgb(40, 45, 50);
         color: rgb(225, 225, 225);
+        font-size: 100%;
       }
       h1 {
         width: 100%;
+        margin-block-start: 0.5em;
+        margin-block-end: 0;
+        padding-bottom: 0.5em;
         text-align: center;
+        border-bottom: solid 1px rgba(255, 255, 255, 0.2);
       }
       @keyframes blink {
         0% {opacity: 0;}
@@ -35,8 +43,59 @@ This program is licensed under the GNU GPLv3 copyleft license (see https://www.g
           animation: blink 2s ease-in-out 0s infinite normal;
         }
       }
+      #filters {
+        position: absolute;
+        right: 1em;
+        top: 1em;
+        &>input[type=checkbox] {
+          appearance: none;
+          width: 1.2em;
+          height: 1.2em;
+          margin-left: 1em;
+          background-color: rgb(30, 30, 35);
+          color: rgb(225, 225, 225);
+          border: solid 0.45em rgb(30, 30, 35);
+          outline: solid 1px rgba(225, 225, 225, 0.2);
+          outline-offset: -1px;
+          vertical-align: middle;
+          font-size: 100%;
+          &:checked {
+            background-color: rgb(225, 225, 225);
+          }
+          &:is(:hover, :focus-visible) {
+            outline-color: rgba(225, 225, 225, 0.4);
+          }
+          &+span {
+            vertical-align: middle;
+          }
+          &#fworking+span {
+            color: dodgerblue;
+          }
+          &#fcompleted+span {
+            color: limegreen;
+          }
+          &#faborted+span {
+            color: crimson;
+          }
+        }
+        &:has(>#fworking:not(:checked))~#downloads>li.working {
+          display: none;
+        }
+        &:has(>#fcompleted:not(:checked))~#downloads>li.completed {
+          display: none;
+        }
+        &:has(>#faborted:not(:checked))~#downloads>li.aborted {
+          display: none;
+        }
+      }
       #downloads {
+        flex: 1 1 content;
         max-width: 100%;
+        overflow-y: auto;
+        @supports not (-moz-appearance:none) {
+          scrollbar-color: rgb(121, 123, 126) rgb(34, 37, 43);
+        }
+        scrollbar-gutter: stable;
         margin: 0;
         padding-left: 2em;
         padding-right: 1.5em;
@@ -164,6 +223,7 @@ This program is licensed under the GNU GPLv3 copyleft license (see https://www.g
   <body>
     <h1>IDownload center</h1>
     <div id="connected" class="not">&udarr;</div>
+    <div id="filters"><input id="fworking" type="checkbox" checked autocomplete="off"><span>&#x1f86b;</span><input id="fcompleted" type="checkbox" checked autocomplete="off"><span>&#x2714;</span><input id="faborted" type="checkbox" checked autocomplete="off"><span>&#x2716;</span></div>
     <ul id="downloads">
       <li id="download_pattern">
         <div class="url"><span class="url"></span></div>
