@@ -1,4 +1,4 @@
-# idownload v1.2.1 (https://github.com/PCigales/WinSocketTB)
+# idownload v1.2.2 (https://github.com/PCigales/WinSocketTB)
 # Copyright © 2025 PCigales
 # This program is licensed under the GNU GPLv3 copyleft license (see https://www.gnu.org/licenses)
 
@@ -112,7 +112,7 @@ if started and st != 'completed':
   print('status:', st)
   print('progression: %s' % download.wait_progress_bar(100, 0), end='\b'*118, flush=True)
   while True:
-    print('progression: %s' % download.wait_progress_bar(100), end='\b'*118, flush=True)
+    print('progression: %s' % download.wait_progress_bar(100, 5), end='\b'*118, flush=True)
     progress = download.progress
     if (st := progress['status']) in ('completed', 'aborted'):
       break
